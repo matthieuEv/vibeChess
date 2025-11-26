@@ -1,14 +1,41 @@
 {
-  "name": "stockfish",
+  "name": "vibeChess",
   "private": true,
   "version": "0.0.0",
+  "description": "A lightweight web chess app with Stockfish analysis",
+  "author": "matthieuEv",
   "type": "module",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && NODE_ENV=development electron .\"",
+    "electron:build": "npm run build && electron-builder"
+  },
+  "build": {
+    "appId": "com.vibechess.app",
+    "productName": "vibeChess",
+    "mac": {
+      "category": "public.app-category.board-games",
+      "target": ["dmg", "zip"]
+    },
+    "win": {
+      "target": ["nsis", "zip"]
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Game"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    }
   },
   "dependencies": {
     "chess.js": "^1.4.0",
@@ -22,8 +49,11 @@
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
-    "@vitest/coverage-v8": "^2.1.4",
     "@vitejs/plugin-react": "^5.1.1",
+    "@vitest/coverage-v8": "^2.1.4",
+    "concurrently": "^9.2.1",
+    "electron": "^39.2.3",
+    "electron-builder": "^26.0.12",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
@@ -31,6 +61,7 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",
-    "vitest": "^2.1.4"
+    "vitest": "^2.1.4",
+    "wait-on": "^9.0.3"
   }
 }
