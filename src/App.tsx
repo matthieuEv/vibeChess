@@ -27,7 +27,7 @@ type ArrowToDraw = {
   opacity?: number
 }
 
-const ENGINE_PATH = '/engine/stockfish-17.1-lite-single-03e3232.js'
+const ENGINE_PATH = './engine/stockfish-17.1-lite-single-03e3232.js'
 const THINK_TIME_MS = 1200
 const ENGINE_MIN_ELO = 1350 // Stockfish ignores below ~1300, so we'll cap it via blunders
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))

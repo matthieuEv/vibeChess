@@ -11,8 +11,8 @@ function createWindow() {
     height: 800,
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false, // Pour simplifier l'accès aux workers si besoin, sinon true + preload
-      webSecurity: false // Parfois nécessaire pour charger des ressources locales en dev
+      contextIsolation: false, // Easier access to workers if needed; otherwise set true with preload
+      webSecurity: false // Sometimes needed to load local resources in dev
     },
   });
 
@@ -20,11 +20,21 @@ function createWindow() {
     win.loadURL('http://localhost:5173');
     win.webContents.openDevTools();
   } else {
-    // En production, on charge le fichier index.html du build Vite
-    // On suppose que main.js est dans electron/ et le build dans dist/
-    // Donc on remonte d'un cran
+    // In production, load the index.html from the Vite build
+    // main.js is in electron/ and the build lives in dist/, so step up one level
     win.loadFile(path.join(__dirname, '../dist/index.html'));
+    
+    // Enable DevTools in production for debugging
+    // win.webContents.openDevTools(); 
   }
+
+  // Keyboard shortcut to open DevTools (Cmd+Option+I on Mac, Ctrl+Shift+I on Windows/Linux)
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.control && input.shift && input.key.toLowerCase() === 'i' || input.meta && input.alt && input.key.toLowerCase() === 'i') {
+      win.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
 }
 
 app.whenReady().then(() => {
