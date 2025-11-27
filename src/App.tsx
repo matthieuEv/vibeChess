@@ -108,12 +108,14 @@ function App() {
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
 
   const workerRef = useRef<Worker | null>(null)
-  const readyResolver = useRef<(() => void) | null>(null)
+  const readyResolvers = useRef<(() => void)[]>([])
   const bestResolver = useRef<((line: string) => void) | null>(null)
   const infoHandler = useRef<((line: string) => void) | null>(null)
   const boardShellRef = useRef<HTMLDivElement>(null)
   const analysisCacheRef = useRef<Map<string, Suggestion[]>>(new Map())
   const lastRequestedFenRef = useRef<string | null>(null)
+  const engineBusyRef = useRef(false)
+  const analysisRequestIdRef = useRef(0)
 
   const logEngine = useCallback((...args: unknown[]) => {
     if (import.meta.env.DEV) {
@@ -145,14 +147,27 @@ function App() {
   const waitForReady = useCallback(() =>
     new Promise<void>((resolve) => {
       if (!workerRef.current) return resolve()
-      readyResolver.current = resolve
+      readyResolvers.current.push(resolve)
       sendEngine('isready')
     }), [sendEngine])
 
-  const requestMultiSuggestions = useCallback(async (fen: string, multiPv = 3) => {
+  const waitForEngineIdle = useCallback(async () => {
+    while (engineBusyRef.current) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }, [])
+
+  const requestMultiSuggestions = useCallback(async (fen: string, multiPv = 3, requestId?: number) => {
     const suggestions: Suggestion[] = []
     if (!workerRef.current) return suggestions
+    
+    // If we are preempted before even starting
+    if (requestId !== undefined && analysisRequestIdRef.current !== requestId) return []
+
     await waitForReady()
+
+    // Double check after waiting
+    if (requestId !== undefined && analysisRequestIdRef.current !== requestId) return []
 
     sendEngine(`setoption name MultiPV value ${multiPv}`)
     sendEngine(`position fen ${fen}`)
@@ -178,11 +193,20 @@ function App() {
       bestResolver.current = () => resolve()
     })
 
+    engineBusyRef.current = true
     sendEngine(`go movetime ${THINK_TIME_MS}`)
     await bestPromise
+    engineBusyRef.current = false
 
     infoHandler.current = null
     bestResolver.current = null
+
+    // If we were preempted, don't do cleanup or return potentially partial results if we want strictness.
+    // But returning partial results is usually fine. The important thing is skipping cleanup if another request took over.
+    if (requestId !== undefined && analysisRequestIdRef.current !== requestId) {
+      return suggestions.filter(Boolean).sort((a, b) => b.score - a.score)
+    }
+
     await waitForReady()
     sendEngine('setoption name MultiPV value 1')
 
@@ -202,28 +226,46 @@ function App() {
       return
     }
 
+    // Increment ID to invalidate any pending requests
+    const requestId = ++analysisRequestIdRef.current
+
     setAnalysisLoading(true)
     setAnalysisError(null)
     setAnalysisSuggestions([])
     lastRequestedFenRef.current = fen
 
+    // If engine is busy, stop it
+    if (engineBusyRef.current) {
+      sendEngine('stop')
+    }
+
+    // Wait for it to be free
+    await waitForEngineIdle()
+
+    // If another request came in while we were waiting, abort this one
+    if (analysisRequestIdRef.current !== requestId) return
+
     try {
-      const suggestions = await requestMultiSuggestions(fen, 3)
-      analysisCacheRef.current.set(fen, suggestions)
-      if (lastRequestedFenRef.current === fen) {
-        setAnalysisSuggestions(suggestions)
+      const suggestions = await requestMultiSuggestions(fen, 3, requestId)
+      
+      // Only update state if we are still the active request
+      if (analysisRequestIdRef.current === requestId) {
+        analysisCacheRef.current.set(fen, suggestions)
+        if (lastRequestedFenRef.current === fen) {
+          setAnalysisSuggestions(suggestions)
+        }
       }
     } catch (err) {
       console.error(err)
-      if (lastRequestedFenRef.current === fen) {
+      if (analysisRequestIdRef.current === requestId && lastRequestedFenRef.current === fen) {
         setAnalysisError('Unable to fetch suggestions.')
       }
     } finally {
-      if (lastRequestedFenRef.current === fen) {
+      if (analysisRequestIdRef.current === requestId && lastRequestedFenRef.current === fen) {
         setAnalysisLoading(false)
       }
     }
-  }, [engineReady, requestMultiSuggestions])
+  }, [engineReady, requestMultiSuggestions, sendEngine, waitForEngineIdle])
 
   const applyEngineStrength = useCallback((eloValue: number) => {
     const skill = computeSkillLevel(eloValue)
@@ -245,8 +287,10 @@ function App() {
       }
     })
 
+    engineBusyRef.current = true
     sendEngine(`go movetime ${THINK_TIME_MS}`)
     const move = await bestMovePromise
+    engineBusyRef.current = false
     return move || null
   }
 
@@ -356,6 +400,13 @@ function App() {
   }
 
   const startNewGame = useCallback((color: PlayerColor = 'white') => {
+    // Stop any running analysis
+    if (engineBusyRef.current) {
+      sendEngine('stop')
+    }
+    // Invalidate pending analysis requests
+    analysisRequestIdRef.current++
+
     gameRef.current = new Chess()
     setBoardFen(gameRef.current.fen())
     setHistory([])
@@ -488,8 +539,9 @@ function App() {
       }
 
       if (line === 'readyok') {
-        readyResolver.current?.()
-        readyResolver.current = null
+        const resolvers = readyResolvers.current
+        readyResolvers.current = []
+        resolvers.forEach((resolve) => resolve())
         setEngineReady(true)
         setEngineStatus('Engine ready')
         return
@@ -516,10 +568,10 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!engineReady || !workerRef.current) return
+    if (!engineReady || !workerRef.current || engineThinking) return
     applyEngineStrength(elo)
     sendEngine('isready')
-  }, [elo, engineReady, applyEngineStrength, sendEngine])
+  }, [elo, engineReady, applyEngineStrength, sendEngine, engineThinking])
 
   useEffect(() => {
     if (!analysisMode || !analysisBoardFen) return
@@ -542,7 +594,7 @@ function App() {
   }, [analysisMode, analysisIndex, analysisEntries.length, goToAnalysisIndex])
 
   useEffect(() => {
-    if (gameOver || !engineReady || analysisMode) return
+    if (gameOver || !engineReady || analysisMode || engineThinking) return
     if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) {
       setEngineThinking(true)
       requestWeakOrBestMove(gameRef.current.fen(), elo).then((move) => {
@@ -806,6 +858,8 @@ function App() {
                 step={50}
                 value={elo}
                 onChange={(e) => setElo(Number(e.target.value))}
+                disabled={history.length > 0}
+                title={history.length > 0 ? "Start a new game to change difficulty" : "Adjust difficulty"}
               />
               <div className="slider-values">
                 <span>600</span>
