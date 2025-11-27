@@ -9,6 +9,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    icon: path.join(__dirname, isDev ? '../public/icon.png' : '../dist/icon.png'),
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false, // Easier access to workers if needed; otherwise set true with preload
