@@ -107,6 +107,13 @@ function App() {
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [showGameOverDialog, setShowGameOverDialog] = useState(false)
 
+  // Layout state for Analysis Mode
+  const [sidebarSplit, setSidebarSplit] = useState(50) // Percentage height of the top panel
+  const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(false)
+  const [isChatCollapsed, setIsChatCollapsed] = useState(false)
+  const draggingRef = useRef(false)
+  const splitViewRef = useRef<HTMLDivElement>(null)
+
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
 
@@ -598,6 +605,36 @@ function App() {
   }, [analysisMode, analysisIndex, analysisEntries.length, goToAnalysisIndex])
 
   useEffect(() => {
+    if (!analysisMode) return
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!draggingRef.current) return
+      e.preventDefault()
+      
+      const container = splitViewRef.current
+      if (!container) return
+      
+      const containerRect = container.getBoundingClientRect()
+      const relativeY = e.clientY - containerRect.top
+      const percentage = (relativeY / containerRect.height) * 100
+      
+      setSidebarSplit(clamp(percentage, 15, 85))
+    }
+
+    const handleMouseUp = () => {
+      draggingRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [analysisMode])
+
+  useEffect(() => {
     if (gameOver) {
       setShowGameOverDialog(true)
     } else {
@@ -953,77 +990,177 @@ function App() {
           <h3 style={{ margin: 0 }}>{turnText}</h3>
         </div>
 
-        <div className="history-container">
-          {formattedHistory.length ? (
-            formattedHistory.map(({ moveNumber, white, black }) => {
-              const baseIndex = (moveNumber - 1) * 2
-              const isCurrentLine =
-                currentHistoryIndex === baseIndex || currentHistoryIndex === baseIndex + 1
-              return (
-                <div
-                  className={`move-row ${isCurrentLine ? 'active' : ''}`}
-                  key={moveNumber}
-                  ref={isCurrentLine ? (el) => el?.scrollIntoView({ block: 'nearest' }) : null}
-                >
-                  <span className="move-number">{moveNumber}.</span>
-                  <span
-                    className={`move-white ${currentHistoryIndex === baseIndex ? 'active' : ''}`}
-                    onClick={() => analysisMode && goToAnalysisIndex(baseIndex + 1)}
+        {!analysisMode ? (
+          <div className="history-container">
+            {formattedHistory.length ? (
+              formattedHistory.map(({ moveNumber, white, black }) => {
+                const baseIndex = (moveNumber - 1) * 2
+                const isCurrentLine =
+                  currentHistoryIndex === baseIndex || currentHistoryIndex === baseIndex + 1
+                return (
+                  <div
+                    className={`move-row ${isCurrentLine ? 'active' : ''}`}
+                    key={moveNumber}
+                    ref={isCurrentLine ? (el) => el?.scrollIntoView({ block: 'nearest' }) : null}
                   >
-                    {white ?? '-'}
-                  </span>
-                  <span
-                    className={`move-black ${currentHistoryIndex === baseIndex + 1 ? 'active' : ''}`}
-                    onClick={() => analysisMode && black && goToAnalysisIndex(baseIndex + 2)}
-                  >
-                    {black ?? ''}
-                  </span>
-                </div>
-              )
-            })
-          ) : (
-            <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
-              Moves will appear here
-            </div>
-          )}
-        </div>
-
-        {analysisMode && (
-          <div className="analysis-panel">
-            {analysisError && <div style={{ color: 'red', fontSize: 12, marginBottom: 8 }}>{analysisError}</div>}
-            {analysisLoading && <div style={{ fontSize: 12, marginBottom: 8 }}>Loading analysis...</div>}
-            <div className="analysis-controls">
-              <button
-                className="ghost small"
-                onClick={() => goToAnalysisIndex(analysisIndex - 1)}
-                disabled={analysisIndex === 0}
-              >
-                &larr;
-              </button>
-              <span className="muted" style={{ fontSize: 12 }}>
-                {analysisIndex + 1} / {Math.max(analysisEntries.length, 1)}
-                {analysisTurnLabel ? ` - ${analysisTurnLabel}` : ''}
-              </span>
-              <button
-                className="ghost small"
-                onClick={() => goToAnalysisIndex(analysisIndex + 1)}
-                disabled={analysisIndex >= analysisEntries.length - 1}
-              >
-                &rarr;
-              </button>
-            </div>
-
-            {isExploringVariant && (
-              <div style={{ marginBottom: 8 }}>
-                <button
-                  className="ghost small"
-                  style={{ width: '100%', color: '#ffad71', borderColor: '#ffad71' }}
-                  onClick={resetAnalysisPosition}
-                >
-                  Return to Main Line
-                </button>
+                    <span className="move-number">{moveNumber}.</span>
+                    <span
+                      className={`move-white ${currentHistoryIndex === baseIndex ? 'active' : ''}`}
+                      onClick={() => analysisMode && goToAnalysisIndex(baseIndex + 1)}
+                    >
+                      {white ?? '-'}
+                    </span>
+                    <span
+                      className={`move-black ${currentHistoryIndex === baseIndex + 1 ? 'active' : ''}`}
+                      onClick={() => analysisMode && black && goToAnalysisIndex(baseIndex + 2)}
+                    >
+                      {black ?? ''}
+                    </span>
+                  </div>
+                )
+              })
+            ) : (
+              <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
+                Moves will appear here
               </div>
             )}
+          </div>
+        ) : (
+          <div className="split-view-container" ref={splitViewRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* Move Analysis Panel */}
+            <div 
+              className={`panel-section top ${isHistoryCollapsed ? 'collapsed' : ''}`}
+              style={{ 
+                flex: isHistoryCollapsed ? '0 0 auto' : (isChatCollapsed ? '1 1 auto' : `0 0 calc(${sidebarSplit}% - 2px)`) 
+              }}
+            >
+              <div className="section-header" onClick={() => setIsHistoryCollapsed(!isHistoryCollapsed)}>
+                <span>Move Analysis</span>
+                <div className={`chevron ${isHistoryCollapsed ? 'collapsed' : ''}`}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </div>
+              </div>
+              {!isHistoryCollapsed && (
+                <div className="section-content">
+                  <div className="history-container" style={{ flex: 1, minHeight: 0 }}>
+                    {formattedHistory.length ? (
+                      formattedHistory.map(({ moveNumber, white, black }) => {
+                        const baseIndex = (moveNumber - 1) * 2
+                        const isCurrentLine =
+                          currentHistoryIndex === baseIndex || currentHistoryIndex === baseIndex + 1
+                        return (
+                          <div
+                            className={`move-row ${isCurrentLine ? 'active' : ''}`}
+                            key={moveNumber}
+                            ref={isCurrentLine ? (el) => el?.scrollIntoView({ block: 'nearest' }) : null}
+                          >
+                            <span className="move-number">{moveNumber}.</span>
+                            <span
+                              className={`move-white ${currentHistoryIndex === baseIndex ? 'active' : ''}`}
+                              onClick={() => analysisMode && goToAnalysisIndex(baseIndex + 1)}
+                            >
+                              {white ?? '-'}
+                            </span>
+                            <span
+                              className={`move-black ${currentHistoryIndex === baseIndex + 1 ? 'active' : ''}`}
+                              onClick={() => analysisMode && black && goToAnalysisIndex(baseIndex + 2)}
+                            >
+                              {black ?? ''}
+                            </span>
+                          </div>
+                        )
+                      })
+                    ) : (
+                      <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
+                        Moves will appear here
+                      </div>
+                    )}
+                  </div>
+                  <div className="analysis-panel">
+                    {analysisError && <div style={{ color: 'red', fontSize: 12, marginBottom: 8 }}>{analysisError}</div>}
+                    <div className="analysis-controls">
+                      <button
+                        className="ghost small"
+                        onClick={() => goToAnalysisIndex(analysisIndex - 1)}
+                        disabled={analysisIndex === 0}
+                      >
+                        &larr;
+                      </button>
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        {analysisIndex + 1} / {Math.max(analysisEntries.length, 1)}
+                        {analysisTurnLabel ? ` - ${analysisTurnLabel}` : ''}
+                        {analysisLoading && ' (Thinking...)'}
+                      </span>
+                      <button
+                        className="ghost small"
+                        onClick={() => goToAnalysisIndex(analysisIndex + 1)}
+                        disabled={analysisIndex >= analysisEntries.length - 1}
+                      >
+                        &rarr;
+                      </button>
+                    </div>
+
+                    {isExploringVariant && (
+                      <div style={{ marginBottom: 8 }}>
+                        <button
+                          className="ghost small"
+                          style={{ width: '100%', color: '#ffad71', borderColor: '#ffad71' }}
+                          onClick={resetAnalysisPosition}
+                        >
+                          Return to Main Line
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Resizer */}
+            {!isHistoryCollapsed && !isChatCollapsed && (
+              <div 
+                className="panel-resizer"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  draggingRef.current = true
+                  document.body.style.cursor = 'row-resize'
+                  document.body.style.userSelect = 'none'
+                }}
+                onDoubleClick={() => setSidebarSplit(50)}
+              />
+            )}
+
+            {/* Chat Panel */}
+            <div 
+              className={`panel-section bottom ${isChatCollapsed ? 'collapsed' : ''}`}
+              style={{ 
+                flex: isChatCollapsed ? '0 0 auto' : (isHistoryCollapsed ? '1 1 auto' : '1 1 auto') 
+              }}
+            >
+              <div className="section-header" onClick={() => setIsChatCollapsed(!isChatCollapsed)}>
+                <span>Chess AI</span>
+                <div className={`chevron ${isChatCollapsed ? 'collapsed' : ''}`}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </div>
+              </div>
+              {!isChatCollapsed && (
+                <div className="section-content chat-container">
+                  <div className="chat-messages">
+                    <div className="chat-message ai">
+                      Hello! I'm your chess assistant. Ask me anything about this position.
+                    </div>
+                  </div>
+                  <div className="chat-input-area">
+                    <input type="text" placeholder="Ask a question..." />
+                    <button className="ghost small">Send</button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </aside>
