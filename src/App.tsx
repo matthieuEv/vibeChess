@@ -912,7 +912,24 @@ function App() {
               />
               <div className="slider-values">
                 <span>600</span>
-                <span>{elo}</span>
+                <input
+                  type="number"
+                  className="elo-input"
+                  value={elo}
+                  min={600}
+                  max={2800}
+                  step={10}
+                  onChange={(e) => {
+                    const val = e.target.value === '' ? 0 : parseInt(e.target.value)
+                    setElo(val)
+                  }}
+                  onBlur={() => {
+                    const clamped = Math.min(2800, Math.max(600, elo))
+                    setElo(clamped)
+                  }}
+                  disabled={history.length > 0}
+                  title={history.length > 0 ? "Start a new game to change difficulty" : "Type to adjust ELO"}
+                />
                 <span>2800</span>
               </div>
             </div>
