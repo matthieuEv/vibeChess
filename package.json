@@ -20,23 +20,14 @@
     "productName": "vibeChess",
     "mac": {
       "category": "public.app-category.board-games",
-      "target": ["dmg", "zip"]
+      "target": ["dmg"]
     },
     "win": {
-      "target": ["nsis", "zip"]
+      "target": ["nsis"]
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": ["AppImage"],
       "category": "Game"
-    },
-    "deb": {
-      "depends": [
-        "libnotify4",
-        "libxtst6",
-        "libnss3",
-        "libasound2",
-        "libxss1"
-      ]
     },
     "files": [
       "dist/**/*",
