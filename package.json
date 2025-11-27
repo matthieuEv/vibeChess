@@ -27,7 +27,9 @@
     },
     "linux": {
       "target": ["AppImage", "deb"],
-      "category": "Game",
+      "category": "Game"
+    },
+    "deb": {
       "depends": [
         "libnotify4",
         "libxtst6",
