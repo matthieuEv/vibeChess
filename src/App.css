@@ -169,6 +169,11 @@ h1 {
   margin-bottom: 4px;
 }
 
+.slider input[type='range']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .slider-values {
   display: flex;
   justify-content: space-between;
@@ -200,6 +205,48 @@ h1 {
 .toggle button.active {
   background: rgba(89, 224, 179, 0.18);
   color: var(--accent);
+}
+
+.toggle button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+/* Components: ELO Input */
+.elo-input {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: bold;
+  text-align: center;
+  width: 50px;
+  padding: 2px 0;
+  -moz-appearance: textfield;
+  appearance: textfield;
+  transition: all 0.12s ease;
+}
+
+.elo-input:hover:not(:disabled),
+.elo-input:focus {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border);
+  outline: none;
+}
+
+.elo-input::-webkit-outer-spin-button,
+.elo-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.elo-input:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* Board Shell & Arrows */
