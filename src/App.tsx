@@ -29,7 +29,7 @@ type ArrowToDraw = {
 
 const ENGINE_PATH = './engine/stockfish-17.1-lite-single-03e3232.js'
 const THINK_TIME_MS = 1200
-const ENGINE_MIN_ELO = 1350 // Stockfish ignores below ~1300, so we'll cap it via blunders
+const ENGINE_MIN_ELO = 1320 // Stockfish UCI_Elo floor is around 1320
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
 
 const computeSkillLevel = (elo: number) => {
@@ -39,10 +39,12 @@ const computeSkillLevel = (elo: number) => {
 }
 
 const computeBlunderProbability = (elo: number) => {
-  // Lower elo => more blunders. 600 -> ~40% chance to worsen, 1000 -> ~25%, 1600+ -> ~2-5%
+  // Lower elo => more blunders.
+  // 600 ELO should be very blunder-prone (e.g. ~80% chance to play sub-optimally)
   if (elo >= 1600) return 0.02
   const t = clamp((1600 - elo) / 1000, 0, 1) // 600 => 1, 1600 => 0
-  return 0.05 + t * 0.35
+  // Scale from 0.05 (at 1600) to 0.80 (at 600)
+  return 0.05 + t * 0.75
 }
 
 const uciToSan = (fen: string, uci: string) => {
@@ -103,6 +105,7 @@ function App() {
   const [analysisSuggestions, setAnalysisSuggestions] = useState<Suggestion[]>([])
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
+  const [showGameOverDialog, setShowGameOverDialog] = useState(false)
 
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
@@ -302,14 +305,15 @@ function App() {
     const legalMoves = chess.moves({ verbose: true }) as Move[]
 
     // Occasionally play a totally random move to simulate real blunders
-    if (rand < blunderProb * 0.25 && legalMoves.length) {
+    // For 600 ELO (blunderProb ~0.8), this is ~32% chance of a random move
+    if (rand < blunderProb * 0.4 && legalMoves.length) {
       const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)]
       return `${randomMove.from}${randomMove.to}${randomMove.promotion ?? ''}`
     }
 
     // Otherwise pick a weaker option among the best three
     if (rand < blunderProb && options.length >= 2) {
-      if (rand < blunderProb * 0.6 && options.length >= 3) {
+      if (rand < blunderProb * 0.7 && options.length >= 3) {
         return options[options.length - 1].uci // worst of the top 3
       }
       return options[1].uci // second best
@@ -592,6 +596,14 @@ function App() {
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
   }, [analysisMode, analysisIndex, analysisEntries.length, goToAnalysisIndex])
+
+  useEffect(() => {
+    if (gameOver) {
+      setShowGameOverDialog(true)
+    } else {
+      setShowGameOverDialog(false)
+    }
+  }, [gameOver])
 
   useEffect(() => {
     if (gameOver || !engineReady || analysisMode || engineThinking) return
@@ -1015,6 +1027,23 @@ function App() {
           </div>
         )}
       </aside>
+
+      {showGameOverDialog && gameOver && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h2>Game Over</h2>
+            <p>{gameOver}</p>
+            <div className="modal-actions">
+              <button className="primary" onClick={() => startNewGame(playerColor)}>
+                New Game
+              </button>
+              <button className="ghost" onClick={() => setShowGameOverDialog(false)}>
+                View Board
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
