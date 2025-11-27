@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 import { Chess, SQUARES } from 'chess.js'
 import type { Move, PieceSymbol, Square } from 'chess.js'
 import { Chessboard } from 'react-chessboard'
+import { Bot, Palette, Settings, X } from 'lucide-react'
 import './App.css'
 import {
   buildAnalysisEntriesFromVerbose,
@@ -106,6 +107,8 @@ function App() {
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [showGameOverDialog, setShowGameOverDialog] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<'ai' | 'board'>('ai')
 
   // Layout state for Analysis Mode
   const [sidebarSplit, setSidebarSplit] = useState(50) // Percentage height of the top panel
@@ -878,9 +881,6 @@ function App() {
         <div className="sidebar-header">
           <p className="eyebrow">Local Stockfish 17.1</p>
           <h1>vibeChess</h1>
-          <p className="muted" style={{ fontSize: 13 }}>
-            Desktop-class chess app running locally.
-          </p>
         </div>
 
         <div className="sidebar-menu">
@@ -940,6 +940,14 @@ function App() {
         </div>
         
         <div style={{ marginTop: 'auto' }}>
+           <button 
+             className="ghost" 
+             onClick={() => setShowSettings(true)}
+             style={{ width: '100%', marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+           >
+             <Settings size={16} />
+             Settings
+           </button>
            <div className="status-row">
             <span className={`status-dot ${engineReady ? 'ok' : 'wait'}`} />
             <span className="status-text" style={{ fontSize: 12 }}>
@@ -1177,6 +1185,83 @@ function App() {
               <button className="ghost" onClick={() => setShowGameOverDialog(false)}>
                 View Board
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSettings && (
+        <div className="modal-overlay" onClick={(e) => {
+          if (e.target === e.currentTarget) setShowSettings(false)
+        }}>
+          <div className="settings-modal">
+            <div className="settings-sidebar">
+              <div className="settings-sidebar-header">
+                <span className="user-name">vibeChess</span>
+                <span className="user-role">Settings</span>
+              </div>
+              <div className="settings-nav">
+                <button 
+                  className={`settings-nav-item ${settingsTab === 'ai' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('ai')}
+                >
+                  <Bot size={18} className="icon" />
+                  Chess AI
+                </button>
+                <button 
+                  className={`settings-nav-item ${settingsTab === 'board' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('board')}
+                >
+                  <Palette size={18} className="icon" />
+                  Board Customization
+                </button>
+              </div>
+            </div>
+            <div className="settings-content">
+              <div className="settings-header">
+                <h2>{settingsTab === 'ai' ? 'Chess AI' : 'Board Customization'}</h2>
+                <button className="close-button" onClick={() => setShowSettings(false)}>
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="settings-body">
+                {settingsTab === 'ai' && (
+                  <div className="settings-section">
+                    <p className="muted">Configure AI behavior and personality.</p>
+                    {/* AI Settings will go here */}
+                    <div className="setting-item">
+                      <div className="setting-label">
+                        <span>AI Personality</span>
+                        <span className="setting-desc">Choose how the AI interacts with you</span>
+                      </div>
+                      <select className="setting-select" disabled>
+                        <option>Friendly Coach</option>
+                        <option>Grandmaster</option>
+                        <option>Trash Talker</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {settingsTab === 'board' && (
+                  <div className="settings-section">
+                    <p className="muted">Customize the board appearance.</p>
+                    {/* Board Settings will go here */}
+                    <div className="setting-item">
+                      <div className="setting-label">
+                        <span>Board Theme</span>
+                        <span className="setting-desc">Select the color scheme for the board</span>
+                      </div>
+                      <select className="setting-select" disabled>
+                        <option>Green (Default)</option>
+                        <option>Blue</option>
+                        <option>Brown</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
