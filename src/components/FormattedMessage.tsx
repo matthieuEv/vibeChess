@@ -1,6 +1,6 @@
 
 
-export const parseMessageContent = (content: string) => {
+const parseMessageContent = (content: string) => {
   const lines = content.split('\n')
   return lines.map(line => {
     const trimmed = line.trim()

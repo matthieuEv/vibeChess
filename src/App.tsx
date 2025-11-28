@@ -32,6 +32,22 @@ type ArrowToDraw = {
   opacity?: number
 }
 
+interface ToolCall {
+  function: {
+    name: string;
+    arguments: Record<string, unknown>;
+  };
+  id?: string;
+  type?: 'function';
+}
+
+interface ChatMessage {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  tool_calls?: ToolCall[];
+  name?: string;
+}
+
 const ENGINE_PATH = './engine/stockfish-17.1-lite-single-03e3232.js'
 const THINK_TIME_MS = 1200
 const ENGINE_MIN_ELO = 1320 // Stockfish UCI_ELO floor is around 1320
@@ -59,6 +75,31 @@ const findKingSquare = (game: Chess, color: 'w' | 'b'): Square | null => {
 
 
 
+
+const pickMoveWithBlunder = (fen: string, options: Suggestion[], blunderProb: number) => {
+  if (!options.length) return null
+
+  const rand = Math.random()
+  const chess = new Chess(fen)
+  const legalMoves = chess.moves({ verbose: true }) as Move[]
+
+  // Occasionally play a totally random move to simulate real blunders
+  // For 600 ELO (blunderProb ~0.8), this is ~32% chance of a random move
+  if (rand < blunderProb * 0.4 && legalMoves.length) {
+    const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)]
+    return `${randomMove.from}${randomMove.to}${randomMove.promotion ?? ''}`
+  }
+
+  // Otherwise pick a weaker option among the best three
+  if (rand < blunderProb && options.length >= 2) {
+    if (rand < blunderProb * 0.7 && options.length >= 3) {
+      return options[options.length - 1].uci // worst of the top 3
+    }
+    return options[1].uci // second best
+  }
+
+  return options[0].uci
+}
 
 function App() {
   const gameRef = useRef(new Chess())
@@ -95,7 +136,7 @@ function App() {
   const [connectionStatusMsg, setConnectionStatusMsg] = useState<string | null>(null)
 
   // Chat State
-  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string; tool_calls?: any[] }[]>([])
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatInput, setChatInput] = useState('')
   const [isChatLoading, setIsChatLoading] = useState(false)
 
@@ -288,7 +329,7 @@ function App() {
     sendEngine(`setoption name Skill Level value ${skill}`)
   }, [sendEngine])
 
-  const requestBestMove = async (fen: string) => {
+  const requestBestMove = useCallback(async (fen: string) => {
     if (!workerRef.current) return null
     await waitForReady()
     sendEngine(`position fen ${fen}`)
@@ -305,34 +346,9 @@ function App() {
     const move = await bestMovePromise
     engineBusyRef.current = false
     return move || null
-  }
+  }, [waitForReady, sendEngine])
 
-  const pickMoveWithBlunder = (fen: string, options: Suggestion[], blunderProb: number) => {
-    if (!options.length) return null
-
-    const rand = Math.random()
-    const chess = new Chess(fen)
-    const legalMoves = chess.moves({ verbose: true }) as Move[]
-
-    // Occasionally play a totally random move to simulate real blunders
-    // For 600 ELO (blunderProb ~0.8), this is ~32% chance of a random move
-    if (rand < blunderProb * 0.4 && legalMoves.length) {
-      const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)]
-      return `${randomMove.from}${randomMove.to}${randomMove.promotion ?? ''}`
-    }
-
-    // Otherwise pick a weaker option among the best three
-    if (rand < blunderProb && options.length >= 2) {
-      if (rand < blunderProb * 0.7 && options.length >= 3) {
-        return options[options.length - 1].uci // worst of the top 3
-      }
-      return options[1].uci // second best
-    }
-
-    return options[0].uci
-  }
-
-  const requestWeakOrBestMove = async (fen: string, eloValue: number) => {
+  const requestWeakOrBestMove = useCallback(async (fen: string, eloValue: number) => {
     const blunderProb = computeBlunderProbability(eloValue)
     if (blunderProb <= 0.03) {
       return requestBestMove(fen)
@@ -341,7 +357,7 @@ function App() {
     const suggestions = await requestMultiSuggestions(fen, 3)
     const picked = pickMoveWithBlunder(fen, suggestions, blunderProb)
     return picked ?? (await requestBestMove(fen))
-  }
+  }, [requestBestMove, requestMultiSuggestions])
 
   const enterAnalysisMode = () => {
     if (!engineReady || !history.length) return
@@ -450,7 +466,7 @@ function App() {
       role: 'assistant',
       content: "Hello! I'm your chess assistant. Ask me anything about this position.",
     }] : [])
-  }, [ollamaConnected])
+  }, [ollamaConnected, sendEngine])
 
   const onDrop = (sourceSquare: Square, targetSquare: Square) => {
     if (analysisMode) {
@@ -481,7 +497,7 @@ function App() {
     }
   }
 
-  const handleSquareClick = (arg: any) => {
+  const handleSquareClick = (arg: Square | { square: Square }) => {
     const square = (typeof arg === 'string' ? arg : arg.square) as Square
     if (analysisMode) {
       if (selectedSquare && selectedSquare !== square) {
@@ -674,7 +690,7 @@ function App() {
         setEngineThinking(false)
       })
     }
-  }, [boardFen, engineReady, gameOver, analysisMode, playerColor, elo, requestWeakOrBestMove])
+  }, [boardFen, engineReady, gameOver, analysisMode, playerColor, elo, requestWeakOrBestMove, engineThinking])
 
   const turnText = useMemo(() => {
     if (analysisMode) {
@@ -891,7 +907,7 @@ function App() {
     let currentSimulatedIndex = analysisIndexRef.current
 
     try {
-      const messagesToSend: any[] = [
+      const messagesToSend: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         ...chatMessages.filter(m => m.role !== 'system'),
         userMessage,
@@ -1107,17 +1123,17 @@ function App() {
           const modelsRes = await fetch(`${ollamaUrl}/api/tags`)
           if (modelsRes.ok) {
             const data = await modelsRes.json()
-            setAvailableModels(data.models.map((m: any) => m.name))
+            setAvailableModels(data.models.map((m: { name: string }) => m.name))
           }
-        } catch (e) {
-          console.error("Failed to fetch models", e)
+        } catch {
+          console.error("Failed to fetch models")
         }
       } else {
         setOllamaConnected(false)
         setAvailableModels([])
         if (isManual) setConnectionStatusMsg('Failed to connect')
       }
-    } catch (e) {
+    } catch {
       setOllamaConnected(false)
       setAvailableModels([])
       if (isManual) setConnectionStatusMsg('Failed to connect')

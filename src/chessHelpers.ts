@@ -36,7 +36,7 @@ export const sanitizeVerboseHistory = (verboseMoves: Move[]) => {
       } else {
         break
       }
-    } catch (e) {
+    } catch {
       break
     }
   }
