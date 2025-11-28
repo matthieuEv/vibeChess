@@ -52,7 +52,6 @@ describe('chessHelpers', () => {
     it('stops replay if an invalid move is encountered', () => {
         // Create a history with a valid move then an invalid one manually
         const validMove = { from: 'e2', to: 'e4', color: 'w', piece: 'p', san: 'e4', flags: 'n', lan: 'e2e4', before: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', after: 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1' }
-        // @ts-expect-error - mocking an invalid move object
         const invalidMove = { from: 'e2', to: 'e5', color: 'w', piece: 'p', san: 'e5' } 
         
         // @ts-expect-error - testing invalid input

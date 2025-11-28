@@ -497,7 +497,7 @@ function App() {
     }
   }
 
-  const handleSquareClick = (arg: Square | { square: Square }) => {
+  const handleSquareClick = (arg: any) => {
     const square = (typeof arg === 'string' ? arg : arg.square) as Square
     if (analysisMode) {
       if (selectedSquare && selectedSquare !== square) {
@@ -1062,7 +1062,7 @@ function App() {
               result = `Error executing tool: ${e}`
             }
 
-            const toolMessage = {
+            const toolMessage: ChatMessage = {
               role: 'tool',
               content: result,
               name: name,
