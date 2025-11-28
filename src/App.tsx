@@ -4,6 +4,7 @@ import { Chess, SQUARES } from 'chess.js'
 import type { Move, PieceSymbol, Square } from 'chess.js'
 import { Chessboard } from 'react-chessboard'
 import { Bot, Palette, Settings, X } from 'lucide-react'
+import systemPromptText from './systemPrompt.txt?raw'
 import './App.css'
 import {
   buildAnalysisEntriesFromVerbose,
@@ -30,7 +31,7 @@ type ArrowToDraw = {
 
 const ENGINE_PATH = './engine/stockfish-17.1-lite-single-03e3232.js'
 const THINK_TIME_MS = 1200
-const ENGINE_MIN_ELO = 1320 // Stockfish UCI_Elo floor is around 1320
+const ENGINE_MIN_ELO = 1320 // Stockfish UCI_ELO floor is around 1320
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
 
 const computeSkillLevel = (elo: number) => {
@@ -110,12 +111,27 @@ function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState<'ai' | 'board'>('ai')
 
+  // AI Settings
+  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
+  const [ollamaModel, setOllamaModel] = useState('llama3.2')
+  const [systemPrompt] = useState(systemPromptText)
+  const [temperature] = useState(0.7)
+  const [ollamaConnected, setOllamaConnected] = useState(false)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [connectionStatusMsg, setConnectionStatusMsg] = useState<string | null>(null)
+
+  // Chat State
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant' | 'system'; content: string }[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [isChatLoading, setIsChatLoading] = useState(false)
+
   // Layout state for Analysis Mode
   const [sidebarSplit, setSidebarSplit] = useState(50) // Percentage height of the top panel
   const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(false)
   const [isChatCollapsed, setIsChatCollapsed] = useState(false)
   const draggingRef = useRef(false)
   const splitViewRef = useRef<HTMLDivElement>(null)
+  const chatEndRef = useRef<HTMLDivElement>(null)
 
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
@@ -438,7 +454,12 @@ function App() {
     setAnalysisError(null)
     analysisGameRef.current = null
     analysisCacheRef.current.clear()
-  }, [])
+
+    setChatMessages(ollamaConnected ? [{
+      role: 'assistant',
+      content: "Hello! I'm your chess assistant. Ask me anything about this position.",
+    }] : [])
+  }, [ollamaConnected])
 
   const onDrop = (sourceSquare: Square, targetSquare: Square) => {
     if (analysisMode) {
@@ -875,6 +896,149 @@ function App() {
     )
   }
 
+  const handleSendMessage = async () => {
+    if (!chatInput.trim() || isChatLoading || !ollamaConnected) return
+
+    const userMessage = { role: 'user' as const, content: chatInput }
+    setChatMessages((prev) => [...prev, userMessage])
+    setChatInput('')
+    setIsChatLoading(true)
+
+    try {
+      const messagesToSend = [
+        { role: 'system', content: systemPrompt },
+        ...chatMessages.filter(m => m.role !== 'system'), // Filter out any previous system messages if we stored them
+        userMessage,
+      ]
+
+      const response = await fetch(`${ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: ollamaModel,
+          messages: messagesToSend,
+          stream: true,
+          options: {
+            temperature: temperature,
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.statusText}`)
+      }
+
+      if (!response.body) throw new Error('No response body')
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value, { stream: true })
+        const lines = chunk.split('\n').filter((line) => line.trim() !== '')
+
+        for (const line of lines) {
+          try {
+            const json = JSON.parse(line)
+            const content = json.message?.content
+            if (content) {
+              setChatMessages((prev) => {
+                const lastMsg = prev[prev.length - 1]
+                if (lastMsg.role === 'user' || lastMsg.role === 'system') {
+                  return [...prev, { role: 'assistant', content }]
+                } else {
+                  const newHistory = [...prev]
+                  const updatedLast = { ...newHistory[newHistory.length - 1] }
+                  updatedLast.content += content
+                  newHistory[newHistory.length - 1] = updatedLast
+                  return newHistory
+                }
+              })
+            }
+          } catch (e) {
+            console.error('Error parsing JSON chunk', e)
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to send message to Ollama:', error)
+      // We don't add an error message to chat anymore, the status indicator should handle it
+    } finally {
+      setIsChatLoading(false)
+    }
+  }
+
+  const checkOllamaConnection = useCallback(async (isManual = false) => {
+    if (isManual) setConnectionStatusMsg('Testing...')
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 2000) // 2s timeout
+      
+      const res = await fetch(ollamaUrl, { 
+        signal: controller.signal 
+      })
+      clearTimeout(timeoutId)
+      
+      if (res.ok) {
+        setOllamaConnected(true)
+        if (isManual) setConnectionStatusMsg('Connected!')
+        // Fetch models
+        try {
+          const modelsRes = await fetch(`${ollamaUrl}/api/tags`)
+          if (modelsRes.ok) {
+            const data = await modelsRes.json()
+            setAvailableModels(data.models.map((m: any) => m.name))
+          }
+        } catch (e) {
+          console.error("Failed to fetch models", e)
+        }
+      } else {
+        setOllamaConnected(false)
+        setAvailableModels([])
+        if (isManual) setConnectionStatusMsg('Failed to connect')
+      }
+    } catch (e) {
+      setOllamaConnected(false)
+      setAvailableModels([])
+      if (isManual) setConnectionStatusMsg('Failed to connect')
+    }
+
+    if (isManual) {
+      setTimeout(() => setConnectionStatusMsg(null), 3000)
+    }
+  }, [ollamaUrl])
+
+  useEffect(() => {
+    checkOllamaConnection()
+    const interval = setInterval(checkOllamaConnection, 10000) // Check every 10s
+    return () => clearInterval(interval)
+  }, [checkOllamaConnection])
+
+  useEffect(() => {
+    if (ollamaConnected) {
+      setChatMessages((prev) => {
+        if (prev.length === 0) {
+          return [
+            {
+              role: 'assistant',
+              content: "Hello! I'm your chess assistant. Ask me anything about this position.",
+            },
+          ]
+        }
+        return prev
+      })
+    }
+  }, [ollamaConnected])
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages, isChatLoading])
+
   return (
     <div className="app-container">
       <nav className="sidebar">
@@ -1165,7 +1329,13 @@ function App() {
               }}
             >
               <div className="section-header" onClick={() => setIsChatCollapsed(!isChatCollapsed)}>
-                <span>Chess AI</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>Chess AI</span>
+                  <span 
+                    className={`status-dot ${ollamaConnected ? 'ok' : 'wait'}`} 
+                    title={ollamaConnected ? "Connected to Ollama" : "Ollama disconnected"} 
+                  />
+                </div>
                 <div className={`chevron ${isChatCollapsed ? 'collapsed' : ''}`}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="6 9 12 15 18 9"></polyline>
@@ -1175,13 +1345,30 @@ function App() {
               {!isChatCollapsed && (
                 <div className="section-content chat-container">
                   <div className="chat-messages">
-                    <div className="chat-message ai">
-                      Hello! I'm your chess assistant. Ask me anything about this position.
-                    </div>
+                    {chatMessages.map((msg, idx) => (
+                      <div key={idx} className={`chat-message ${msg.role === 'user' ? 'user' : 'ai'}`}>
+                        {msg.content}
+                      </div>
+                    ))}
+                    {isChatLoading && chatMessages[chatMessages.length - 1]?.role !== 'assistant' && <div className="chat-message ai">Thinking...</div>}
+                    <div ref={chatEndRef} />
                   </div>
                   <div className="chat-input-area">
-                    <input type="text" placeholder="Ask a question..." />
-                    <button className="ghost small">Send</button>
+                    <input
+                      type="text"
+                      placeholder={ollamaConnected ? "Ask a question..." : "Ollama disconnected (check settings)"}
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                      disabled={isChatLoading || !ollamaConnected}
+                    />
+                    <button
+                      className="ghost small"
+                      onClick={handleSendMessage}
+                      disabled={isChatLoading || !chatInput.trim() || !ollamaConnected}
+                    >
+                      Send
+                    </button>
                   </div>
                 </div>
               )}
@@ -1245,17 +1432,58 @@ function App() {
               <div className="settings-body">
                 {settingsTab === 'ai' && (
                   <div className="settings-section">
-                    <p className="muted">Configure AI behavior and personality.</p>
-                    {/* AI Settings will go here */}
+                    <p className="muted">Configure your local LLM connection (Ollama).</p>
+                    
                     <div className="setting-item">
                       <div className="setting-label">
-                        <span>AI Personality</span>
-                        <span className="setting-desc">Choose how the AI interacts with you</span>
+                        <span>Ollama URL</span>
+                        <span className="setting-desc">Endpoint for the Ollama API</span>
                       </div>
-                      <select className="setting-select" disabled>
-                        <option>Friendly Coach</option>
-                        <option>Grandmaster</option>
-                        <option>Trash Talker</option>
+                      <div style={{ position: 'relative', display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <input 
+                          className="setting-input" 
+                          type="text" 
+                          value={ollamaUrl} 
+                          onChange={(e) => setOllamaUrl(e.target.value)}
+                        />
+                        <button className="ghost small" onClick={() => checkOllamaConnection(true)}>
+                          Test
+                        </button>
+                        {connectionStatusMsg && (
+                          <span style={{ 
+                            position: 'absolute',
+                            top: '100%',
+                            right: 0,
+                            marginTop: 4,
+                            fontSize: 11,
+                            fontWeight: 500,
+                            color: ollamaConnected ? 'var(--accent)' : '#ff6b6b',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            {connectionStatusMsg}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="setting-item">
+                      <div className="setting-label">
+                        <span>Model Name</span>
+                        <span className="setting-desc">Select from available models</span>
+                      </div>
+                      <select 
+                        className="setting-select" 
+                        value={ollamaModel} 
+                        onChange={(e) => setOllamaModel(e.target.value)}
+                        disabled={!ollamaConnected || availableModels.length === 0}
+                      >
+                        {availableModels.length > 0 ? (
+                          availableModels.map((model) => (
+                            <option key={model} value={model}>{model}</option>
+                          ))
+                        ) : (
+                          <option value={ollamaModel}>{ollamaModel} (Not connected)</option>
+                        )}
                       </select>
                     </div>
                   </div>
