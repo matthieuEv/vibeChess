@@ -497,7 +497,7 @@ function App() {
     }
   }
 
-  const handleSquareClick = (arg: any) => {
+  const handleSquareClick = (arg: { square: string } | string) => {
     const square = (typeof arg === 'string' ? arg : arg.square) as Square
     if (analysisMode) {
       if (selectedSquare && selectedSquare !== square) {
