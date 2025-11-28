@@ -115,6 +115,7 @@ function App() {
   const draggingRef = useRef(false)
   const splitViewRef = useRef<HTMLDivElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const analysisPanelRef = useRef<HTMLDivElement>(null)
 
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
@@ -618,7 +619,12 @@ function App() {
       const relativeY = e.clientY - containerRect.top
       const percentage = (relativeY / containerRect.height) * 100
       
-      setSidebarSplit(clamp(percentage, 10, 90))
+      // Calculate minimum percentage based on analysis panel height
+      // Header is ~37px, Analysis Panel varies but we want to ensure it's visible
+      const minHeightPx = (analysisPanelRef.current?.offsetHeight || 100) + 37
+      const minPercentage = (minHeightPx / containerRect.height) * 100
+      
+      setSidebarSplit(clamp(percentage, minPercentage, 95))
     }
 
     const handleMouseUp = () => {
@@ -1382,7 +1388,7 @@ function App() {
                       </div>
                     )}
                   </div>
-                  <div className="analysis-panel">
+                  <div className="analysis-panel" ref={analysisPanelRef}>
                     {analysisError && <div style={{ color: 'red', fontSize: 12, marginBottom: 8 }}>{analysisError}</div>}
                     <div className="analysis-controls">
                       <button
