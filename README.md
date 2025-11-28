@@ -3,16 +3,12 @@
 > Wanted a lightweight web chess app with Stockfish analysis, without a subscripton on chess.com
 > So i vibecoded one
 
-## Prerequisites
-- Node.js 18+ recommended
-- npm (shipped with Node)
-
 ## Installation
 ```bash
 npm i
 ```
 
-## Run in dev
+## Run the app
 ```bash
 npm run dev
 ```
@@ -21,51 +17,21 @@ Then open the URL shown in the terminal (default http://localhost:5173).
 ## Key details
 - The Stockfish 17.1 lite engine is already copied to `public/engine/stockfish-17.1-lite-single-03e3232.{js,wasm}`. They are served statically; don't rename or move them without updating `ENGINE_PATH` in `src/App.tsx`.
 - ELO is adjusted via `UCI_LimitStrength`/`UCI_Elo`. The slider ranges from 600 to 2800.
-- The "Analyze" button starts interactive mode: Stockfish computes lines, the board restarts from the beginning, and you navigate with the left/right arrows. At each position the best lines are displayed, and you can play variations to explore branches.
 
-## AI Coach Setup (Local LLM)
+## Chess AI
 
 vibeChess features a fully integrated AI Coach that runs locally on your machine using **Ollama**. It can analyze your games, explain mistakes, and even control the board to demonstrate variations.
 
-### 1. Install Ollama
-Download and install Ollama from [ollama.com](https://ollama.com/). This service runs the AI models locally.
+### Setup Ollama and the Model
 
-### 2. Download a Model
-Open your terminal and pull a model. We recommend `llama3.2` for a good balance of speed and intelligence, but `mistral` or `gemma` work well too.
-
-```bash
-# Recommended
-ollama pull llama3.2
-
-# Alternatives
-ollama pull mistral
-ollama pull gemma2
-```
-
-### 3. Configure CORS (Important!)
-By default, browsers block web pages from talking to local servers. You need to allow vibeChess to talk to Ollama.
-
-**Mac/Linux:**
-Stop Ollama (if running) and restart it with this environment variable:
-```bash
-OLLAMA_ORIGINS="*" ollama serve
-```
-
-**Windows:**
-1. Quit Ollama from the taskbar.
-2. Open PowerShell as Administrator.
-3. Run:
-   ```powershell
-   [Environment]::SetEnvironmentVariable("OLLAMA_ORIGINS", "*", "User")
+1. **Install Ollama**: Follow the instructions at [ollama.com](https://ollama.com/) to install Ollama on your machine.
+2. **Download the Model**: Open a terminal and run:
+   ```bash
+   ollama pull llama3.1:8b
    ```
-4. Restart Ollama.
+   You can choose another model if you prefer, but make sure it's compatible with tooling. (If you choose a wrong model, the app will show an error when connecting.)
 
-### 4. Connect in vibeChess
-1. Open vibeChess.
-2. Click the **Settings** button in the sidebar.
-3. Go to the **Chess AI** tab.
-4. If Ollama is running, you should see "Connected".
-5. Select your model (e.g., `llama3.2`) from the dropdown.
+3. **Choose your model**: To choose your model, simply open the settings and enter the model name (default is `llama3.1:8b`).
 
 ## 🧠 AI Features
 
