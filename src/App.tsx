@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Chess, SQUARES } from 'chess.js'
-import type { Move, PieceSymbol, Square } from 'chess.js'
+import type { Move, Square } from 'chess.js'
 import { Chessboard } from 'react-chessboard'
+import { Bot, Palette, Settings, X, Activity } from 'lucide-react'
+import systemPromptText from './systemPrompt.txt?raw'
 import './App.css'
 import {
   buildAnalysisEntriesFromVerbose,
+  getGameOverTitle,
   type AnalysisEntry,
 } from './chessHelpers'
+import { clamp, computeSkillLevel, computeBlunderProbability, uciToSan } from './engineHelpers'
+import { CHAT_TOOLS } from './ai/tools'
+import FormattedMessage from './components/FormattedMessage'
 
 type PlayerColor = 'white' | 'black'
 
@@ -27,39 +33,25 @@ type ArrowToDraw = {
   opacity?: number
 }
 
+interface ToolCall {
+  function: {
+    name: string;
+    arguments: Record<string, unknown>;
+  };
+  id?: string;
+  type?: 'function';
+}
+
+interface ChatMessage {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  tool_calls?: ToolCall[];
+  name?: string;
+}
+
 const ENGINE_PATH = './engine/stockfish-17.1-lite-single-03e3232.js'
 const THINK_TIME_MS = 1200
-const ENGINE_MIN_ELO = 1320 // Stockfish UCI_Elo floor is around 1320
-const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
-
-const computeSkillLevel = (elo: number) => {
-  // SkillLevel 0-20
-  const scaled = Math.round(((elo - 600) / (2800 - 600)) * 20)
-  return clamp(scaled, 0, 20)
-}
-
-const computeBlunderProbability = (elo: number) => {
-  // Lower elo => more blunders.
-  // 600 ELO should be very blunder-prone (e.g. ~80% chance to play sub-optimally)
-  if (elo >= 1600) return 0.02
-  const t = clamp((1600 - elo) / 1000, 0, 1) // 600 => 1, 1600 => 0
-  // Scale from 0.05 (at 1600) to 0.80 (at 600)
-  return 0.05 + t * 0.75
-}
-
-const uciToSan = (fen: string, uci: string) => {
-  try {
-    const chess = new Chess(fen)
-    const move = chess.move({
-      from: uci.slice(0, 2) as Square,
-      to: uci.slice(2, 4) as Square,
-      promotion: uci[4] as PieceSymbol | undefined,
-    })
-    return move?.san ?? uci
-  } catch {
-    return uci
-  }
-}
+const ENGINE_MIN_ELO = 1320 // Stockfish UCI_ELO floor is around 1320
 
 const buildGameOverText = (game: Chess) => {
   if (game.isCheckmate()) {
@@ -85,6 +77,31 @@ const findKingSquare = (game: Chess, color: 'w' | 'b'): Square | null => {
 
 
 
+const pickMoveWithBlunder = (fen: string, options: Suggestion[], blunderProb: number) => {
+  if (!options.length) return null
+
+  const rand = Math.random()
+  const chess = new Chess(fen)
+  const legalMoves = chess.moves({ verbose: true }) as Move[]
+
+  // Occasionally play a totally random move to simulate real blunders
+  // For 600 ELO (blunderProb ~0.8), this is ~32% chance of a random move
+  if (rand < blunderProb * 0.4 && legalMoves.length) {
+    const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)]
+    return `${randomMove.from}${randomMove.to}${randomMove.promotion ?? ''}`
+  }
+
+  // Otherwise pick a weaker option among the best three
+  if (rand < blunderProb && options.length >= 2) {
+    if (rand < blunderProb * 0.7 && options.length >= 3) {
+      return options[options.length - 1].uci // worst of the top 3
+    }
+    return options[1].uci // second best
+  }
+
+  return options[0].uci
+}
+
 function App() {
   const gameRef = useRef(new Chess())
   const analysisGameRef = useRef<Chess | null>(null)
@@ -106,6 +123,41 @@ function App() {
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [showGameOverDialog, setShowGameOverDialog] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<'ai' | 'board'>('ai')
+
+  // AI Settings
+  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
+  const [ollamaModel, setOllamaModel] = useState('llama3.2')
+  const [systemPrompt] = useState(systemPromptText)
+  const [temperature] = useState(0.7)
+  const [ollamaConnected, setOllamaConnected] = useState(false)
+  const [toolsSupported, setToolsSupported] = useState(false)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [connectionStatusMsg, setConnectionStatusMsg] = useState<string | null>(null)
+
+  // Chat State
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [isChatLoading, setIsChatLoading] = useState(false)
+
+  // Refs for tool access
+  const analysisIndexRef = useRef(analysisIndex)
+  const analysisEntriesRef = useRef(analysisEntries)
+  const analysisSuggestionsRef = useRef(analysisSuggestions)
+  
+  useEffect(() => { analysisIndexRef.current = analysisIndex }, [analysisIndex])
+  useEffect(() => { analysisEntriesRef.current = analysisEntries }, [analysisEntries])
+  useEffect(() => { analysisSuggestionsRef.current = analysisSuggestions }, [analysisSuggestions])
+
+  // Layout state for Analysis Mode
+  const [sidebarSplit, setSidebarSplit] = useState(50) // Percentage height of the top panel
+  const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(false)
+  const [isChatCollapsed, setIsChatCollapsed] = useState(false)
+  const draggingRef = useRef(false)
+  const splitViewRef = useRef<HTMLDivElement>(null)
+  const chatEndRef = useRef<HTMLDivElement>(null)
+  const analysisPanelRef = useRef<HTMLDivElement>(null)
 
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
@@ -278,7 +330,7 @@ function App() {
     sendEngine(`setoption name Skill Level value ${skill}`)
   }, [sendEngine])
 
-  const requestBestMove = async (fen: string) => {
+  const requestBestMove = useCallback(async (fen: string) => {
     if (!workerRef.current) return null
     await waitForReady()
     sendEngine(`position fen ${fen}`)
@@ -295,34 +347,9 @@ function App() {
     const move = await bestMovePromise
     engineBusyRef.current = false
     return move || null
-  }
+  }, [waitForReady, sendEngine])
 
-  const pickMoveWithBlunder = (fen: string, options: Suggestion[], blunderProb: number) => {
-    if (!options.length) return null
-
-    const rand = Math.random()
-    const chess = new Chess(fen)
-    const legalMoves = chess.moves({ verbose: true }) as Move[]
-
-    // Occasionally play a totally random move to simulate real blunders
-    // For 600 ELO (blunderProb ~0.8), this is ~32% chance of a random move
-    if (rand < blunderProb * 0.4 && legalMoves.length) {
-      const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)]
-      return `${randomMove.from}${randomMove.to}${randomMove.promotion ?? ''}`
-    }
-
-    // Otherwise pick a weaker option among the best three
-    if (rand < blunderProb && options.length >= 2) {
-      if (rand < blunderProb * 0.7 && options.length >= 3) {
-        return options[options.length - 1].uci // worst of the top 3
-      }
-      return options[1].uci // second best
-    }
-
-    return options[0].uci
-  }
-
-  const requestWeakOrBestMove = async (fen: string, eloValue: number) => {
+  const requestWeakOrBestMove = useCallback(async (fen: string, eloValue: number) => {
     const blunderProb = computeBlunderProbability(eloValue)
     if (blunderProb <= 0.03) {
       return requestBestMove(fen)
@@ -331,7 +358,7 @@ function App() {
     const suggestions = await requestMultiSuggestions(fen, 3)
     const picked = pickMoveWithBlunder(fen, suggestions, blunderProb)
     return picked ?? (await requestBestMove(fen))
-  }
+  }, [requestBestMove, requestMultiSuggestions])
 
   const enterAnalysisMode = () => {
     if (!engineReady || !history.length) return
@@ -369,8 +396,15 @@ function App() {
   }
 
   const goToAnalysisIndex = useCallback((nextIndex: number) => {
-    if (!analysisMode) return
-    if (!analysisEntries.length) return
+    console.log('[App] goToAnalysisIndex', { nextIndex, analysisMode, entries: analysisEntries.length })
+    if (!analysisMode) {
+      console.warn('[App] goToAnalysisIndex aborted: not in analysis mode')
+      return
+    }
+    if (!analysisEntries.length) {
+      console.warn('[App] goToAnalysisIndex aborted: no analysis entries')
+      return
+    }
     const safeIndex = clamp(nextIndex, 0, analysisEntries.length - 1)
     const entry = analysisEntries[safeIndex]
     if (!entry) return
@@ -394,13 +428,29 @@ function App() {
     // Check if it's the same square (cancel selection)
     if (from === to) return false
 
-    const attempt = () => analysisGameRef.current?.move({ from, to })
-    const withPromotion = () => analysisGameRef.current?.move({ from, to, promotion: 'q' })
-    const move = attempt() || withPromotion()
-    if (!move) return false
-    setAnalysisBoardFen(analysisGameRef.current.fen())
-    setSelectedSquare(null)
-    return true
+    try {
+      let move
+      try {
+        move = analysisGameRef.current.move({ from, to })
+      } catch {
+        // ignore
+      }
+
+      if (!move) {
+        try {
+          move = analysisGameRef.current.move({ from, to, promotion: 'q' })
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!move) return false
+      setAnalysisBoardFen(analysisGameRef.current.fen())
+      setSelectedSquare(null)
+      return true
+    } catch {
+      return false
+    }
   }
 
   const startNewGame = useCallback((color: PlayerColor = 'white') => {
@@ -428,7 +478,12 @@ function App() {
     setAnalysisError(null)
     analysisGameRef.current = null
     analysisCacheRef.current.clear()
-  }, [])
+
+    setChatMessages(ollamaConnected ? [{
+      role: 'assistant',
+      content: "Hello! I'm your chess assistant. Ask me anything about this position.",
+    }] : [])
+  }, [ollamaConnected, sendEngine])
 
   const onDrop = (sourceSquare: Square, targetSquare: Square) => {
     if (analysisMode) {
@@ -459,7 +514,7 @@ function App() {
     }
   }
 
-  const handleSquareClick = (arg: any) => {
+  const handleSquareClick = (arg: { square: string } | string) => {
     const square = (typeof arg === 'string' ? arg : arg.square) as Square
     if (analysisMode) {
       if (selectedSquare && selectedSquare !== square) {
@@ -582,20 +637,42 @@ function App() {
     void loadAnalysisSuggestions(analysisBoardFen)
   }, [analysisMode, analysisBoardFen, loadAnalysisSuggestions])
 
+
+
   useEffect(() => {
     if (!analysisMode) return
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'ArrowLeft') {
-        event.preventDefault()
-        goToAnalysisIndex(analysisIndex - 1)
-      } else if (event.key === 'ArrowRight') {
-        event.preventDefault()
-        goToAnalysisIndex(analysisIndex + 1)
-      }
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!draggingRef.current) return
+      e.preventDefault()
+      
+      const container = splitViewRef.current
+      if (!container) return
+      
+      const containerRect = container.getBoundingClientRect()
+      const relativeY = e.clientY - containerRect.top
+      const percentage = (relativeY / containerRect.height) * 100
+      
+      // Calculate minimum percentage based on analysis panel height
+      // Header is ~37px, Analysis Panel varies but we want to ensure it's visible
+      const minHeightPx = (analysisPanelRef.current?.offsetHeight || 100) + 37
+      const minPercentage = (minHeightPx / containerRect.height) * 100
+      
+      setSidebarSplit(clamp(percentage, minPercentage, 95))
     }
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [analysisMode, analysisIndex, analysisEntries.length, goToAnalysisIndex])
+
+    const handleMouseUp = () => {
+      draggingRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [analysisMode])
 
   useEffect(() => {
     if (gameOver) {
@@ -630,7 +707,7 @@ function App() {
         setEngineThinking(false)
       })
     }
-  }, [boardFen, engineReady, gameOver, analysisMode, playerColor, elo, requestWeakOrBestMove])
+  }, [boardFen, engineReady, gameOver, analysisMode, playerColor, elo, requestWeakOrBestMove, engineThinking])
 
   const turnText = useMemo(() => {
     if (analysisMode) {
@@ -721,10 +798,10 @@ function App() {
       }
     })
 
-    if (currentEntry?.playedMove && analysisBoardFen === currentEntry.fen) {
+    if (currentEntry?.nextMove && analysisBoardFen === currentEntry.fen) {
       arrows.push({
-        from: currentEntry.playedMove.from,
-        to: currentEntry.playedMove.to,
+        from: currentEntry.nextMove.from,
+        to: currentEntry.nextMove.to,
         color: '#ffad71', // Distinct orange for the played move
         width: 6,
         opacity: 1,
@@ -835,15 +912,293 @@ function App() {
     )
   }
 
+  const handleSendMessage = async () => {
+    if (!chatInput.trim() || isChatLoading || !ollamaConnected) return
+
+    const userMessage = { role: 'user' as const, content: chatInput }
+    setChatMessages((prev) => [...prev, userMessage])
+    setChatInput('')
+    setIsChatLoading(true)
+
+    // Keep track of local state for the duration of the conversation turn
+    let currentSimulatedIndex = analysisIndexRef.current
+
+    try {
+      const messagesToSend: ChatMessage[] = [
+        { role: 'system', content: systemPrompt },
+        ...chatMessages.filter(m => m.role !== 'system'),
+        userMessage,
+      ]
+
+      let keepGoing = true
+      let turns = 0
+      
+      while (keepGoing && turns < 5) {
+        turns++
+        const response = await fetch(`${ollamaUrl}/api/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: ollamaModel,
+            messages: messagesToSend,
+            stream: false, // Disable streaming for tool reliability
+            tools: CHAT_TOOLS,
+            options: {
+              temperature: temperature,
+            },
+          }),
+        })
+
+        if (!response.ok) {
+          throw new Error(`Ollama API error: ${response.statusText}`)
+        }
+
+        const data = await response.json()
+        const message = data.message
+        
+        console.log('[Ollama] Received:', message)
+
+        // Add assistant message to history (only if content exists)
+        if (message.content) {
+          setChatMessages((prev) => [...prev, message])
+        }
+        messagesToSend.push(message)
+
+        if (message.tool_calls && message.tool_calls.length > 0) {
+          console.log('[Ollama] Tool calls:', message.tool_calls)
+          for (const toolCall of message.tool_calls) {
+            const { name, arguments: args } = toolCall.function
+            console.log(`[Ollama] Executing ${name} with args:`, args)
+            
+            // Add UI feedback for tool execution
+            let actionDescription = ''
+            if (name === 'navigate_analysis') {
+                if (args.action === 'next') actionDescription = 'Moving forward'
+                else if (args.action === 'previous') actionDescription = 'Moving backward'
+                else if (args.action === 'start') actionDescription = 'Going to start'
+                else if (args.action === 'end') actionDescription = 'Going to end'
+                else if (args.action === 'jump') actionDescription = `Jumping to move ${args.index}`
+            } else if (name === 'get_analysis_state') {
+                actionDescription = 'Checking board state'
+            } else if (name === 'make_analysis_move') {
+                actionDescription = `Playing move ${args.move} on board`
+            }
+
+            if (actionDescription) {
+                 setChatMessages(prev => [...prev, { role: 'system', content: actionDescription }])
+            }
+
+            let result = ''
+            
+            try {
+              // Handle tools
+              if (name === 'get_analysis_state') {
+                const entries = analysisEntriesRef.current
+                const entry = entries[currentSimulatedIndex]
+                const prevEntry = currentSimulatedIndex > 0 ? entries[currentSimulatedIndex - 1] : null
+                const suggestions = analysisSuggestionsRef.current
+                
+                const futureMoves: string[] = []
+                for (let i = 0; i < 5; i++) {
+                  const futureEntry = entries[currentSimulatedIndex + i]
+                  if (futureEntry?.playedMove) {
+                    futureMoves.push(futureEntry.playedMove.san)
+                  }
+                }
+
+                result = JSON.stringify({
+                  index: currentSimulatedIndex,
+                  totalMoves: entries.length,
+                  fen: entry?.fen || boardFen,
+                  lastMove: prevEntry?.playedMove?.san || 'None',
+                  nextMove: entry?.playedMove?.san || 'None',
+                  futureMoves,
+                  turn: new Chess(entry?.fen || boardFen).turn() === 'w' ? 'White' : 'Black',
+                  engineSuggestions: suggestions.map(s => ({
+                    san: s.san,
+                    score: s.score,
+                    uci: s.uci
+                  }))
+                })
+              } else if (name === 'navigate_analysis') {
+                const { action, index } = args
+                const entries = analysisEntriesRef.current
+                let newIndex = currentSimulatedIndex
+
+                if (action === 'next') newIndex++
+                if (action === 'previous') newIndex--
+                if (action === 'start') newIndex = 0
+                if (action === 'end') newIndex = entries.length - 1
+                if (action === 'jump' && typeof index === 'number') newIndex = index
+
+                // Clamp
+                newIndex = Math.max(0, Math.min(newIndex, entries.length - 1))
+                
+                console.log('[Ollama] Navigating to index:', newIndex)
+                
+                // Update local simulation and actual app state
+                currentSimulatedIndex = newIndex
+                goToAnalysisIndex(newIndex)
+                
+                const entry = entries[newIndex]
+                result = JSON.stringify({
+                  status: 'success',
+                  newIndex,
+                  move: entry?.playedMove?.san || 'Start',
+                  fen: entry?.fen
+                })
+              } else if (name === 'make_analysis_move') {
+                const { move } = args
+                if (!analysisGameRef.current) {
+                   result = 'Error: Analysis mode is not active.'
+                } else {
+                   try {
+                     const m = analysisGameRef.current.move(move)
+                     if (m) {
+                       setAnalysisBoardFen(analysisGameRef.current.fen())
+                       // We are now in a variation.
+                       result = JSON.stringify({
+                         status: 'success',
+                         fen: analysisGameRef.current.fen(),
+                         move: m.san,
+                         note: 'Board updated. You are now in a variation. Use navigate_analysis to return to the main line.'
+                       })
+                     } else {
+                       result = 'Error: Invalid move. Please use SAN format (e.g. Nf3).'
+                     }
+                   } catch (e) {
+                     result = `Error making move: ${e}`
+                   }
+                }
+              } else {
+                result = 'Tool not found'
+              }
+            } catch (e) {
+              result = `Error executing tool: ${e}`
+            }
+
+            const toolMessage: ChatMessage = {
+              role: 'tool',
+              content: result,
+              name: name,
+            }
+            messagesToSend.push(toolMessage)
+          }
+        } else {
+          keepGoing = false
+        }
+      }
+
+    } catch (error) {
+      console.error('Failed to send message to Ollama:', error)
+    } finally {
+      setIsChatLoading(false)
+    }
+  }
+
+  const checkModelSupport = useCallback(async (modelName: string) => {
+    if (!ollamaConnected) return
+    try {
+      const response = await fetch(`${ollamaUrl}/api/show`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: modelName }),
+      })
+      if (!response.ok) {
+        setToolsSupported(false)
+        return
+      }
+      const data = await response.json()
+      // Check for tool support indicators in template
+      // Ollama templates for tool-capable models usually include {{.Tools}}
+      const hasTools = data.template?.includes('.Tools') || false
+      setToolsSupported(hasTools)
+    } catch (e) {
+      console.error('Failed to check model capabilities', e)
+      setToolsSupported(false)
+    }
+  }, [ollamaUrl, ollamaConnected])
+
+  const checkOllamaConnection = useCallback(async (isManual = false) => {
+    if (isManual) setConnectionStatusMsg('Testing...')
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 2000) // 2s timeout
+      
+      const res = await fetch(ollamaUrl, { 
+        signal: controller.signal 
+      })
+      clearTimeout(timeoutId)
+      
+      if (res.ok) {
+        setOllamaConnected(true)
+        if (isManual) setConnectionStatusMsg('Connected!')
+        // Fetch models
+        try {
+          const modelsRes = await fetch(`${ollamaUrl}/api/tags`)
+          if (modelsRes.ok) {
+            const data = await modelsRes.json()
+            setAvailableModels(data.models.map((m: { name: string }) => m.name))
+          }
+        } catch {
+          console.error("Failed to fetch models")
+        }
+      } else {
+        setOllamaConnected(false)
+        setAvailableModels([])
+        if (isManual) setConnectionStatusMsg('Failed to connect')
+      }
+    } catch {
+      setOllamaConnected(false)
+      setAvailableModels([])
+      if (isManual) setConnectionStatusMsg('Failed to connect')
+    }
+
+    if (isManual) {
+      setTimeout(() => setConnectionStatusMsg(null), 3000)
+    }
+  }, [ollamaUrl])
+
+  useEffect(() => {
+    if (ollamaConnected && ollamaModel) {
+      checkModelSupport(ollamaModel)
+    }
+  }, [ollamaConnected, ollamaModel, checkModelSupport])
+
+  useEffect(() => {
+    checkOllamaConnection()
+    const interval = setInterval(checkOllamaConnection, 10000) // Check every 10s
+    return () => clearInterval(interval)
+  }, [checkOllamaConnection])
+
+  useEffect(() => {
+    if (ollamaConnected) {
+      setChatMessages((prev) => {
+        if (prev.length === 0) {
+          return [
+            {
+              role: 'assistant',
+              content: "Hello! I'm your chess assistant. Ask me anything about this position.",
+            },
+          ]
+        }
+        return prev
+      })
+    }
+  }, [ollamaConnected])
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages, isChatLoading])
+
   return (
     <div className="app-container">
       <nav className="sidebar">
         <div className="sidebar-header">
           <p className="eyebrow">Local Stockfish 17.1</p>
           <h1>vibeChess</h1>
-          <p className="muted" style={{ fontSize: 13 }}>
-            Desktop-class chess app running locally.
-          </p>
         </div>
 
         <div className="sidebar-menu">
@@ -920,6 +1275,14 @@ function App() {
         </div>
         
         <div style={{ marginTop: 'auto' }}>
+           <button 
+             className="ghost" 
+             onClick={() => setShowSettings(true)}
+             style={{ width: '100%', marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+           >
+             <Settings size={16} />
+             Settings
+           </button>
            <div className="status-row">
             <span className={`status-dot ${engineReady ? 'ok' : 'wait'}`} />
             <span className="status-text" style={{ fontSize: 12 }}>
@@ -970,77 +1333,209 @@ function App() {
           <h3 style={{ margin: 0 }}>{turnText}</h3>
         </div>
 
-        <div className="history-container">
-          {formattedHistory.length ? (
-            formattedHistory.map(({ moveNumber, white, black }) => {
-              const baseIndex = (moveNumber - 1) * 2
-              const isCurrentLine =
-                currentHistoryIndex === baseIndex || currentHistoryIndex === baseIndex + 1
-              return (
-                <div
-                  className={`move-row ${isCurrentLine ? 'active' : ''}`}
-                  key={moveNumber}
-                  ref={isCurrentLine ? (el) => el?.scrollIntoView({ block: 'nearest' }) : null}
-                >
-                  <span className="move-number">{moveNumber}.</span>
-                  <span
-                    className={`move-white ${currentHistoryIndex === baseIndex ? 'active' : ''}`}
-                    onClick={() => analysisMode && goToAnalysisIndex(baseIndex + 1)}
+        {!analysisMode ? (
+          <div className="history-container">
+            {formattedHistory.length ? (
+              formattedHistory.map(({ moveNumber, white, black }) => {
+                const baseIndex = (moveNumber - 1) * 2
+                const isCurrentLine =
+                  currentHistoryIndex === baseIndex || currentHistoryIndex === baseIndex + 1
+                return (
+                  <div
+                    className={`move-row ${isCurrentLine ? 'active' : ''}`}
+                    key={moveNumber}
+                    ref={isCurrentLine ? (el) => el?.scrollIntoView({ block: 'nearest' }) : null}
                   >
-                    {white ?? '-'}
-                  </span>
-                  <span
-                    className={`move-black ${currentHistoryIndex === baseIndex + 1 ? 'active' : ''}`}
-                    onClick={() => analysisMode && black && goToAnalysisIndex(baseIndex + 2)}
-                  >
-                    {black ?? ''}
-                  </span>
-                </div>
-              )
-            })
-          ) : (
-            <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
-              Moves will appear here
-            </div>
-          )}
-        </div>
-
-        {analysisMode && (
-          <div className="analysis-panel">
-            {analysisError && <div style={{ color: 'red', fontSize: 12, marginBottom: 8 }}>{analysisError}</div>}
-            {analysisLoading && <div style={{ fontSize: 12, marginBottom: 8 }}>Loading analysis...</div>}
-            <div className="analysis-controls">
-              <button
-                className="ghost small"
-                onClick={() => goToAnalysisIndex(analysisIndex - 1)}
-                disabled={analysisIndex === 0}
-              >
-                &larr;
-              </button>
-              <span className="muted" style={{ fontSize: 12 }}>
-                {analysisIndex + 1} / {Math.max(analysisEntries.length, 1)}
-                {analysisTurnLabel ? ` - ${analysisTurnLabel}` : ''}
-              </span>
-              <button
-                className="ghost small"
-                onClick={() => goToAnalysisIndex(analysisIndex + 1)}
-                disabled={analysisIndex >= analysisEntries.length - 1}
-              >
-                &rarr;
-              </button>
-            </div>
-
-            {isExploringVariant && (
-              <div style={{ marginBottom: 8 }}>
-                <button
-                  className="ghost small"
-                  style={{ width: '100%', color: '#ffad71', borderColor: '#ffad71' }}
-                  onClick={resetAnalysisPosition}
-                >
-                  Return to Main Line
-                </button>
+                    <span className="move-number">{moveNumber}.</span>
+                    <span
+                      className={`move-white ${currentHistoryIndex === baseIndex ? 'active' : ''}`}
+                      onClick={() => analysisMode && goToAnalysisIndex(baseIndex + 1)}
+                    >
+                      {white ?? '-'}
+                    </span>
+                    <span
+                      className={`move-black ${currentHistoryIndex === baseIndex + 1 ? 'active' : ''}`}
+                      onClick={() => analysisMode && black && goToAnalysisIndex(baseIndex + 2)}
+                    >
+                      {black ?? ''}
+                    </span>
+                  </div>
+                )
+              })
+            ) : (
+              <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
+                Moves will appear here
               </div>
             )}
+          </div>
+        ) : (
+          <div className="split-view-container" ref={splitViewRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* Move Analysis Panel */}
+            <div 
+              className={`panel-section top ${isHistoryCollapsed ? 'collapsed' : ''}`}
+              style={{ 
+                flex: isHistoryCollapsed ? '0 0 auto' : (isChatCollapsed ? '1 1 auto' : `0 0 calc(${sidebarSplit}% - 2px)`) 
+              }}
+            >
+              <div className="section-header" onClick={() => setIsHistoryCollapsed(!isHistoryCollapsed)}>
+                <span>Move Analysis</span>
+                <div className={`chevron ${isHistoryCollapsed ? 'collapsed' : ''}`}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </div>
+              </div>
+              {!isHistoryCollapsed && (
+                <div className="section-content">
+                  <div className="history-container" style={{ flex: 1, minHeight: 0 }}>
+                    {formattedHistory.length ? (
+                      formattedHistory.map(({ moveNumber, white, black }) => {
+                        const baseIndex = (moveNumber - 1) * 2
+                        const isCurrentLine =
+                          currentHistoryIndex === baseIndex || currentHistoryIndex === baseIndex + 1
+                        return (
+                          <div
+                            className={`move-row ${isCurrentLine ? 'active' : ''}`}
+                            key={moveNumber}
+                            ref={isCurrentLine ? (el) => el?.scrollIntoView({ block: 'nearest' }) : null}
+                          >
+                            <span className="move-number">{moveNumber}.</span>
+                            <span
+                              className={`move-white ${currentHistoryIndex === baseIndex ? 'active' : ''}`}
+                              onClick={() => analysisMode && goToAnalysisIndex(baseIndex + 1)}
+                            >
+                              {white ?? '-'}
+                            </span>
+                            <span
+                              className={`move-black ${currentHistoryIndex === baseIndex + 1 ? 'active' : ''}`}
+                              onClick={() => analysisMode && black && goToAnalysisIndex(baseIndex + 2)}
+                            >
+                              {black ?? ''}
+                            </span>
+                          </div>
+                        )
+                      })
+                    ) : (
+                      <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
+                        Moves will appear here
+                      </div>
+                    )}
+                  </div>
+                  <div className="analysis-panel" ref={analysisPanelRef}>
+                    {analysisError && <div style={{ color: 'red', fontSize: 12, marginBottom: 8 }}>{analysisError}</div>}
+                    <div className="analysis-controls">
+                      <button
+                        className="ghost small"
+                        onClick={() => goToAnalysisIndex(analysisIndex - 1)}
+                        disabled={analysisIndex === 0}
+                      >
+                        &larr;
+                      </button>
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        {analysisIndex + 1} / {Math.max(analysisEntries.length, 1)}
+                        {analysisTurnLabel ? ` - ${analysisTurnLabel}` : ''}
+                        {analysisLoading && ' (Thinking...)'}
+                      </span>
+                      <button
+                        className="ghost small"
+                        onClick={() => goToAnalysisIndex(analysisIndex + 1)}
+                        disabled={analysisIndex >= analysisEntries.length - 1}
+                      >
+                        &rarr;
+                      </button>
+                    </div>
+
+                    {isExploringVariant && (
+                      <div style={{ marginBottom: 8 }}>
+                        <button
+                          className="ghost small"
+                          style={{ width: '100%', color: '#ffad71', borderColor: '#ffad71' }}
+                          onClick={resetAnalysisPosition}
+                        >
+                          Return to Main Line
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Resizer */}
+            {!isHistoryCollapsed && !isChatCollapsed && (
+              <div 
+                className="panel-resizer"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  draggingRef.current = true
+                  document.body.style.cursor = 'row-resize'
+                  document.body.style.userSelect = 'none'
+                }}
+                onDoubleClick={() => setSidebarSplit(50)}
+              />
+            )}
+
+            {/* Chat Panel */}
+            <div 
+              className={`panel-section bottom ${isChatCollapsed ? 'collapsed' : ''}`}
+              style={{ 
+                flex: isChatCollapsed ? '0 0 auto' : (isHistoryCollapsed ? '1 1 auto' : '1 1 auto') 
+              }}
+            >
+              <div className="section-header" onClick={() => setIsChatCollapsed(!isChatCollapsed)}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>Chess AI</span>
+                  <span 
+                    className={`status-dot ${ollamaConnected && toolsSupported ? 'ok' : 'wait'}`} 
+                    title={
+                      !ollamaConnected 
+                        ? "Ollama disconnected" 
+                        : (!toolsSupported ? "Model does not support tools" : "Connected to Ollama")
+                    } 
+                  />
+                </div>
+                <div className={`chevron ${isChatCollapsed ? 'collapsed' : ''}`}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </div>
+              </div>
+              {!isChatCollapsed && (
+                <div className="section-content chat-container">
+                  <div className="chat-messages">
+                    {chatMessages.map((msg, idx) => (
+                      <div key={idx} className={`chat-message ${msg.role === 'user' ? 'user' : (msg.role === 'system' ? 'system' : 'ai')}`}>
+                        {msg.role === 'system' && <Activity size={12} />}
+                        {msg.role === 'assistant' ? <FormattedMessage content={msg.content} /> : msg.content}
+                      </div>
+                    ))}
+                    {isChatLoading && chatMessages[chatMessages.length - 1]?.role !== 'assistant' && <div className="chat-message ai">Thinking...</div>}
+                    <div ref={chatEndRef} />
+                  </div>
+                  <div className="chat-input-area">
+                    <input
+                      type="text"
+                      placeholder={
+                        !ollamaConnected 
+                          ? "Ollama disconnected (check settings)" 
+                          : (!toolsSupported ? "Model does not support tools" : "Ask a question...")
+                      }
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                      disabled={isChatLoading || !ollamaConnected || !toolsSupported}
+                    />
+                    <button
+                      className="ghost small"
+                      onClick={handleSendMessage}
+                      disabled={isChatLoading || !chatInput.trim() || !ollamaConnected || !toolsSupported}
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </aside>
@@ -1048,15 +1543,143 @@ function App() {
       {showGameOverDialog && gameOver && (
         <div className="modal-overlay">
           <div className="modal-content">
-            <h2>Game Over</h2>
+            <h2>{getGameOverTitle(gameOver, playerColor)}</h2>
             <p>{gameOver}</p>
             <div className="modal-actions">
               <button className="primary" onClick={() => startNewGame(playerColor)}>
                 New Game
               </button>
-              <button className="ghost" onClick={() => setShowGameOverDialog(false)}>
-                View Board
+              <button className="ghost" onClick={() => {
+                enterAnalysisMode()
+                setShowGameOverDialog(false)
+              }}>
+                Analyze Game
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSettings && (
+        <div className="modal-overlay" onClick={(e) => {
+          if (e.target === e.currentTarget) setShowSettings(false)
+        }}>
+          <div className="settings-modal">
+            <div className="settings-sidebar">
+              <div className="settings-sidebar-header">
+                <span className="user-name">vibeChess</span>
+                <span className="user-role">Settings</span>
+              </div>
+              <div className="settings-nav">
+                <button 
+                  className={`settings-nav-item ${settingsTab === 'ai' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('ai')}
+                >
+                  <Bot size={18} className="icon" />
+                  Chess AI
+                </button>
+                <button 
+                  className={`settings-nav-item ${settingsTab === 'board' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('board')}
+                >
+                  <Palette size={18} className="icon" />
+                  Board Customization
+                </button>
+              </div>
+            </div>
+            <div className="settings-content">
+              <div className="settings-header">
+                <h2>{settingsTab === 'ai' ? 'Chess AI' : 'Board Customization'}</h2>
+                <button className="close-button" onClick={() => setShowSettings(false)}>
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="settings-body">
+                {settingsTab === 'ai' && (
+                  <div className="settings-section">
+                    <p className="muted">Configure your local LLM connection (Ollama).</p>
+                    
+                    <div className="setting-item">
+                      <div className="setting-label">
+                        <span>Ollama URL</span>
+                        <span className="setting-desc">Endpoint for the Ollama API</span>
+                      </div>
+                      <div style={{ position: 'relative', display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <input 
+                          className="setting-input" 
+                          type="text" 
+                          value={ollamaUrl} 
+                          onChange={(e) => setOllamaUrl(e.target.value)}
+                        />
+                        <button className="ghost small" onClick={() => checkOllamaConnection(true)}>
+                          Test
+                        </button>
+                        {connectionStatusMsg && (
+                          <span style={{ 
+                            position: 'absolute',
+                            top: '100%',
+                            right: 0,
+                            marginTop: 4,
+                            fontSize: 11,
+                            fontWeight: 500,
+                            color: ollamaConnected ? 'var(--accent)' : '#ff6b6b',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            {connectionStatusMsg}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="setting-item">
+                      <div className="setting-label">
+                        <span>Model Name</span>
+                        <span className="setting-desc">Select from available models</span>
+                      </div>
+                      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                        <select 
+                          className="setting-select" 
+                          value={ollamaModel} 
+                          onChange={(e) => setOllamaModel(e.target.value)}
+                          disabled={!ollamaConnected || availableModels.length === 0}
+                        >
+                          {availableModels.length > 0 ? (
+                            availableModels.map((model) => (
+                              <option key={model} value={model}>{model}</option>
+                            ))
+                          ) : (
+                            <option value={ollamaModel}>{ollamaModel} (Not connected)</option>
+                          )}
+                        </select>
+                        {ollamaConnected && !toolsSupported && (
+                          <span style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, fontSize: 11, color: '#ff6b6b', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                            This model does not appear to support tools
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {settingsTab === 'board' && (
+                  <div className="settings-section">
+                    <p className="muted">Customize the board appearance.</p>
+                    {/* Board Settings will go here */}
+                    <div className="setting-item">
+                      <div className="setting-label">
+                        <span>Board Theme</span>
+                        <span className="setting-desc">Select the color scheme for the board</span>
+                      </div>
+                      <select className="setting-select" disabled>
+                        <option>Green (Default)</option>
+                        <option>Blue</option>
+                        <option>Brown</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
