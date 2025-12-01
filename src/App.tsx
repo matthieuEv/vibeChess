@@ -782,10 +782,10 @@ function App() {
       }
     })
 
-    if (currentEntry?.playedMove && analysisBoardFen === currentEntry.fen) {
+    if (currentEntry?.nextMove && analysisBoardFen === currentEntry.fen) {
       arrows.push({
-        from: currentEntry.playedMove.from,
-        to: currentEntry.playedMove.to,
+        from: currentEntry.nextMove.from,
+        to: currentEntry.nextMove.to,
         color: '#ffad71', // Distinct orange for the played move
         width: 6,
         opacity: 1,
