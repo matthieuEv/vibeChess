@@ -428,13 +428,29 @@ function App() {
     // Check if it's the same square (cancel selection)
     if (from === to) return false
 
-    const attempt = () => analysisGameRef.current?.move({ from, to })
-    const withPromotion = () => analysisGameRef.current?.move({ from, to, promotion: 'q' })
-    const move = attempt() || withPromotion()
-    if (!move) return false
-    setAnalysisBoardFen(analysisGameRef.current.fen())
-    setSelectedSquare(null)
-    return true
+    try {
+      let move
+      try {
+        move = analysisGameRef.current.move({ from, to })
+      } catch {
+        // ignore
+      }
+
+      if (!move) {
+        try {
+          move = analysisGameRef.current.move({ from, to, promotion: 'q' })
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!move) return false
+      setAnalysisBoardFen(analysisGameRef.current.fen())
+      setSelectedSquare(null)
+      return true
+    } catch {
+      return false
+    }
   }
 
   const startNewGame = useCallback((color: PlayerColor = 'white') => {
