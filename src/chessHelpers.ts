@@ -90,3 +90,16 @@ export const buildAnalysisEntriesFromVerbose = (verboseMoves: Move[]) => {
 
   return entries
 }
+
+export const getGameOverTitle = (gameOver: string | null, playerColor: 'white' | 'black') => {
+  if (!gameOver) return ''
+  const isWhite = playerColor === 'white'
+  
+  if (isWhite && gameOver.includes('White wins')) return 'You Win!'
+  if (!isWhite && gameOver.includes('Black wins')) return 'You Win!'
+  
+  if (isWhite && gameOver.includes('Black wins')) return 'You Lost'
+  if (!isWhite && gameOver.includes('White wins')) return 'You Lost'
+  
+  return 'Game Over'
+}

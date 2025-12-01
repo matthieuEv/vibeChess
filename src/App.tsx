@@ -8,6 +8,7 @@ import systemPromptText from './systemPrompt.txt?raw'
 import './App.css'
 import {
   buildAnalysisEntriesFromVerbose,
+  getGameOverTitle,
   type AnalysisEntry,
 } from './chessHelpers'
 import { clamp, computeSkillLevel, computeBlunderProbability, uciToSan } from './engineHelpers'
@@ -1526,14 +1527,17 @@ function App() {
       {showGameOverDialog && gameOver && (
         <div className="modal-overlay">
           <div className="modal-content">
-            <h2>Game Over</h2>
+            <h2>{getGameOverTitle(gameOver, playerColor)}</h2>
             <p>{gameOver}</p>
             <div className="modal-actions">
               <button className="primary" onClick={() => startNewGame(playerColor)}>
                 New Game
               </button>
-              <button className="ghost" onClick={() => setShowGameOverDialog(false)}>
-                View Board
+              <button className="ghost" onClick={() => {
+                enterAnalysisMode()
+                setShowGameOverDialog(false)
+              }}>
+                Analyze Game
               </button>
             </div>
           </div>
