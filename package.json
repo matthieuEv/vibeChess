@@ -1,5 +1,5 @@
 {
-  "name": "vibeChess",
+  "name":  "vibeChess",
   "private": true,
   "version": "0.0.0",
   "description": "A lightweight web chess app with Stockfish analysis",
@@ -8,6 +8,7 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
+    "debug": "VITE_DEBUG=1 vite",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "lint": "eslint .",

@@ -82,6 +82,51 @@ const findKingSquare = (game: Chess, color: 'w' | 'b'): Square | null => {
   return null
 }
 
+const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_DEBUG === '1'
+const DEBUG_FEN_STORAGE_KEY = 'vibeChess.debug-fen'
+
+const getCachedDebugFen = () => {
+  if (!DEBUG_MODE) return null
+  try {
+    return localStorage.getItem(DEBUG_FEN_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+const storeDebugFen = (fen: string) => {
+  if (!DEBUG_MODE) return
+  try {
+    localStorage.setItem(DEBUG_FEN_STORAGE_KEY, fen)
+  } catch {
+    // Ignore storage failures in debug mode.
+  }
+}
+
+const createGameFromFen = (fen: string) => {
+  try {
+    const game = new Chess()
+    game.load(fen)
+    return game
+  } catch {
+    return null
+  }
+}
+
+const promptForDebugFen = (fallbackFen: string) => {
+  if (!DEBUG_MODE) return fallbackFen
+  const input = window.prompt('Debug FEN (leave empty to reuse previous):', fallbackFen)
+  if (input === null) return fallbackFen
+  const trimmed = input.trim()
+  if (!trimmed) return fallbackFen
+  const game = createGameFromFen(trimmed)
+  if (!game) {
+    window.alert('Invalid FEN. Using previous position.')
+    return fallbackFen
+  }
+  return game.fen()
+}
+
 
 
 
@@ -119,6 +164,7 @@ function App() {
   const lastRequestedFenRef = useRef<string | null>(null)
   const engineBusyRef = useRef(false)
   const analysisRequestIdRef = useRef(0)
+  const debugInitializedRef = useRef(false)
 
   const logEngine = useCallback((...args: unknown[]) => {
     if (import.meta.env.DEV) {
@@ -411,13 +457,34 @@ function App() {
     // Invalidate pending analysis requests
     analysisRequestIdRef.current++
 
-    gameRef.current = new Chess()
-    setBoardFen(gameRef.current.fen())
+    let nextGame = new Chess()
+    let nextFen = nextGame.fen()
+    const nextColor: PlayerColor = DEBUG_MODE ? 'white' : color
+
+    if (DEBUG_MODE) {
+      const cachedFen = getCachedDebugFen()
+      const cachedGame = cachedFen ? createGameFromFen(cachedFen) : null
+      const fallbackGame = cachedGame ?? nextGame
+      const fallbackFen = fallbackGame.fen()
+      const chosenFen = promptForDebugFen(fallbackFen)
+      const chosenGame = createGameFromFen(chosenFen)
+      if (chosenGame) {
+        nextGame = chosenGame
+        nextFen = chosenGame.fen()
+        storeDebugFen(nextFen)
+      } else {
+        nextGame = fallbackGame
+        nextFen = fallbackFen
+      }
+    }
+
+    gameRef.current = nextGame
+    setBoardFen(nextFen)
     setHistory([])
     setHistoryVerbose([])
     setGameOver(null)
     setAnalysisMode(false)
-    setPlayerColor(color)
+    setPlayerColor(nextColor)
     setEngineThinking(false)
     setSelectedSquare(null)
     setAnalysisEntries([])
@@ -525,6 +592,13 @@ function App() {
     updateSize()
     window.addEventListener('resize', updateSize)
     return () => window.removeEventListener('resize', updateSize)
+  }, [])
+
+  useEffect(() => {
+    if (!DEBUG_MODE || debugInitializedRef.current) return
+    debugInitializedRef.current = true
+    startNewGame('white')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -659,6 +733,7 @@ function App() {
   }, [analysisMode, fenToShow, analysisEntries, analysisIndex, engineReady, engineThinking, gameOver, isInCheck])
 
   const handleColorChange = (color: PlayerColor) => {
+    if (DEBUG_MODE) return
     if (color === playerColor) return
     startNewGame(color)
   }
@@ -904,14 +979,14 @@ function App() {
               <button
                 className={playerColor === 'white' ? 'active' : ''}
                 onClick={() => handleColorChange('white')}
-                disabled={gameInProgress}
+                disabled={gameInProgress || DEBUG_MODE}
               >
                 White
               </button>
               <button
                 className={playerColor === 'black' ? 'active' : ''}
                 onClick={() => handleColorChange('black')}
-                disabled={gameInProgress}
+                disabled={gameInProgress || DEBUG_MODE}
               >
                 Black
               </button>
