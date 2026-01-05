@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Chess, SQUARES } from 'chess.js'
 import type { Move, PieceSymbol, Square } from 'chess.js'
-import { Chessboard } from 'react-chessboard'
+import { Chessboard, defaultPieces } from 'react-chessboard'
 import './App.css'
 import {
   buildAnalysisEntriesFromVerbose,
@@ -25,6 +25,11 @@ type ArrowToDraw = {
   color: string
   width: number
   opacity?: number
+}
+
+type PendingPromotion = {
+  from: Square
+  to: Square
 }
 
 const ENGINE_PATH = './engine/stockfish-17.1-lite-single-03e3232.js'
@@ -151,6 +156,7 @@ function App() {
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [showGameOverDialog, setShowGameOverDialog] = useState(false)
+  const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null)
 
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
@@ -493,40 +499,57 @@ function App() {
     setAnalysisSuggestions([])
     setAnalysisLoading(false)
     setAnalysisError(null)
+    setPendingPromotion(null)
     analysisGameRef.current = null
     analysisCacheRef.current.clear()
   }, [])
+
+  const getPromotionMove = (game: Chess, from: Square, to: Square) => {
+    const legalMoves = game.moves({ verbose: true }) as Move[]
+    return legalMoves.find((mv) => mv.from === from && mv.to === to) ?? null
+  }
+
+  const applyMove = (from: Square, to: Square, promotion?: PieceSymbol) => {
+    const move = gameRef.current.move({ from, to, promotion })
+    if (!move) return false
+    setBoardFen(gameRef.current.fen())
+    setHistory(gameRef.current.history())
+    setHistoryVerbose(gameRef.current.history({ verbose: true }) as Move[])
+    setSelectedSquare(null)
+
+    const over = buildGameOverText(gameRef.current)
+    if (over) setGameOver(over)
+    return true
+  }
 
   const onDrop = (sourceSquare: Square, targetSquare: Square) => {
     if (analysisMode) {
       return makeAnalysisMove(sourceSquare, targetSquare)
     }
-    if (gameOver || engineThinking) return false
+    if (gameOver || engineThinking || pendingPromotion) return false
     if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return false
 
     try {
-      const move = gameRef.current.move({
-        from: sourceSquare,
-        to: targetSquare,
-        promotion: 'q',
-      })
-      if (!move) return false
+      const legalMove = getPromotionMove(gameRef.current, sourceSquare, targetSquare)
+      if (!legalMove) return false
 
-      setBoardFen(gameRef.current.fen())
-      setHistory(gameRef.current.history())
-      setHistoryVerbose(gameRef.current.history({ verbose: true }) as Move[])
-      setSelectedSquare(null)
+      if (legalMove.promotion) {
+        setPendingPromotion({
+          from: sourceSquare,
+          to: targetSquare,
+        })
+        setSelectedSquare(null)
+        return false
+      }
 
-      const over = buildGameOverText(gameRef.current)
-      if (over) setGameOver(over)
-      
-      return true
+      return applyMove(sourceSquare, targetSquare)
     } catch {
       return false
     }
   }
 
   const handleSquareClick = (arg: any) => {
+    if (pendingPromotion) return
     const square = (typeof arg === 'string' ? arg : arg.square) as Square
     if (analysisMode) {
       if (selectedSquare && selectedSquare !== square) {
@@ -686,10 +709,14 @@ function App() {
       requestWeakOrBestMove(gameRef.current.fen(), elo).then((move) => {
         if (move) {
           try {
+            const promotion = move.length > 4 ? (move[4] as PieceSymbol) : undefined
+            if (promotion) {
+              console.info('[Stockfish]', 'Promotion chosen:', promotion, 'with', move)
+            }
             gameRef.current.move({
               from: move.slice(0, 2) as Square,
               to: move.slice(2, 4) as Square,
-              promotion: 'q',
+              promotion,
             })
             setBoardFen(gameRef.current.fen())
             setHistory(gameRef.current.history())
@@ -824,6 +851,13 @@ function App() {
   }, [analysisMode, fenToShow])
 
   const gameInProgress = history.length > 0 && !gameOver
+  const promotionPieceTypes = useMemo(() => {
+    const colorPrefix = playerColor === 'white' ? 'w' : 'b'
+    return (['q', 'r', 'b', 'n'] as PieceSymbol[]).map((piece) => ({
+      piece,
+      key: `${colorPrefix}${piece.toUpperCase()}`,
+    }))
+  }, [playerColor])
 
   const AnalysisArrowLayer = ({ arrows }: { arrows: ArrowToDraw[] }) => {
     if (!arrows.length) return null
@@ -1132,6 +1166,33 @@ function App() {
               <button className="ghost" onClick={() => setShowGameOverDialog(false)}>
                 View Board
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingPromotion && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h2>Choose a promotion</h2>
+            <p>Select the piece you want to promote to.</p>
+            <div className="modal-actions">
+              {promotionPieceTypes.map(({ piece, key }) => {
+                const PieceIcon = defaultPieces[key]
+                return (
+                <button
+                  key={key}
+                  className="ghost promotion-button"
+                  aria-label={`Promote to ${piece.toUpperCase()}`}
+                  onClick={() => {
+                    const { from, to } = pendingPromotion
+                    applyMove(from, to, piece)
+                    setPendingPromotion(null)
+                  }}
+                >
+                  {PieceIcon ? <PieceIcon /> : piece.toUpperCase()}
+                </button>
+              )})}
             </div>
           </div>
         </div>
