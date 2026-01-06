@@ -573,17 +573,17 @@ function App() {
     }
   }
 
-  const handleSquareClick = (arg: Square | { square: Square }) => {
+  const handleSquareClick = ({ square }: { piece: { pieceType: string } | null; square: string }) => {
     if (pendingPromotion) return
-    const square = (typeof arg === 'string' ? arg : arg.square) as Square
+    const squareTyped = square as Square
     if (analysisMode) {
-      if (selectedSquare && selectedSquare !== square) {
-        const moved = makeAnalysisMove(selectedSquare, square)
+      if (selectedSquare && selectedSquare !== squareTyped) {
+        const moved = makeAnalysisMove(selectedSquare, squareTyped)
         if (moved) return
       }
-      const piece = analysisGameRef.current?.get(square)
-      if (piece && piece.color === analysisGameRef.current?.turn()) {
-        setSelectedSquare(square)
+      const currentPiece = analysisGameRef.current?.get(squareTyped)
+      if (currentPiece && currentPiece.color === analysisGameRef.current?.turn()) {
+        setSelectedSquare(squareTyped)
       } else {
         setSelectedSquare(null)
       }
@@ -594,13 +594,13 @@ function App() {
     if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return
 
     if (selectedSquare) {
-      const move = onDrop(selectedSquare, square)
+      const move = onDrop(selectedSquare, squareTyped)
       if (move) return
     }
 
-    const piece = gameRef.current.get(square)
-    if (piece && piece.color === (playerColor === 'white' ? 'w' : 'b')) {
-      setSelectedSquare(square)
+    const currentPiece = gameRef.current.get(squareTyped)
+    if (currentPiece && currentPiece.color === (playerColor === 'white' ? 'w' : 'b')) {
+      setSelectedSquare(squareTyped)
     } else {
       setSelectedSquare(null)
     }
