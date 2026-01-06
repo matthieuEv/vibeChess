@@ -80,6 +80,12 @@ const buildGameOverText = (game: Chess) => {
   return null
 }
 
+const isPlayerVictory = (game: Chess, playerColor: PlayerColor) => {
+  if (!game.isCheckmate()) return false
+  const winner = game.turn() === 'w' ? 'black' : 'white'
+  return winner === playerColor
+}
+
 const findKingSquare = (game: Chess, color: 'w' | 'b'): Square | null => {
   for (const sq of SQUARES) {
     const piece = game.get(sq)
@@ -1249,7 +1255,7 @@ function App() {
       {showGameOverDialog && gameOver && (
         <div className="modal-overlay">
           <div className="modal-content">
-            <h2>Game Over</h2>
+            <h2>{isPlayerVictory(gameRef.current, playerColor) ? 'Win' : 'Game Over'}</h2>
             <p>{gameOver}</p>
             <div className="modal-actions">
               <button className="primary" onClick={startGameFromSelection}>
