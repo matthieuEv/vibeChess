@@ -38,6 +38,7 @@ jobs:
           npm version $VERSION --no-git-tag-version
 
       - name: Clean release folder
+        shell: bash
         run: rm -rf release dist
 
       - name: Build Electron App
