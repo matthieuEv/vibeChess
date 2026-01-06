@@ -3,11 +3,13 @@ import type { CSSProperties } from 'react'
 import { Chess, SQUARES } from 'chess.js'
 import type { Move, PieceSymbol, Square } from 'chess.js'
 import { Chessboard, defaultPieces } from 'react-chessboard'
+import { Settings as SettingsIcon } from 'lucide-react'
 import './App.css'
 import {
   buildAnalysisEntriesFromVerbose,
   type AnalysisEntry,
 } from './chessHelpers'
+import Settings, { BOARD_THEMES, type BoardThemeKey } from './Settings'
 
 type PlayerColor = 'white' | 'black'
 type ColorChoice = PlayerColor | 'random'
@@ -160,6 +162,10 @@ function App() {
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [showGameOverDialog, setShowGameOverDialog] = useState(false)
   const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [boardThemeKey, setBoardThemeKey] = useState<BoardThemeKey>('green')
+  const [takebackLimit, setTakebackLimit] = useState<number>(Infinity)
+  const [takebacksUsed, setTakebacksUsed] = useState(0)
 
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
@@ -469,6 +475,7 @@ function App() {
     setGameStarted(false)
     setPendingPromotion(null)
     setSelectedSquare(null)
+    setTakebacksUsed(0)
   }, [sendEngine])
 
   const startNewGame = useCallback((color: PlayerColor = 'white') => {
@@ -517,6 +524,7 @@ function App() {
     setAnalysisError(null)
     setPendingPromotion(null)
     setGameStarted(true)
+    setTakebacksUsed(0)
     analysisGameRef.current = null
     analysisCacheRef.current.clear()
   }, [])
@@ -565,17 +573,17 @@ function App() {
     }
   }
 
-  const handleSquareClick = (arg: any) => {
+  const handleSquareClick = ({ square }: { piece: { pieceType: string } | null; square: string }) => {
     if (pendingPromotion) return
-    const square = (typeof arg === 'string' ? arg : arg.square) as Square
+    const squareTyped = square as Square
     if (analysisMode) {
-      if (selectedSquare && selectedSquare !== square) {
-        const moved = makeAnalysisMove(selectedSquare, square)
+      if (selectedSquare && selectedSquare !== squareTyped) {
+        const moved = makeAnalysisMove(selectedSquare, squareTyped)
         if (moved) return
       }
-      const piece = analysisGameRef.current?.get(square)
-      if (piece && piece.color === analysisGameRef.current?.turn()) {
-        setSelectedSquare(square)
+      const currentPiece = analysisGameRef.current?.get(squareTyped)
+      if (currentPiece && currentPiece.color === analysisGameRef.current?.turn()) {
+        setSelectedSquare(squareTyped)
       } else {
         setSelectedSquare(null)
       }
@@ -586,13 +594,13 @@ function App() {
     if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return
 
     if (selectedSquare) {
-      const move = onDrop(selectedSquare, square)
+      const move = onDrop(selectedSquare, squareTyped)
       if (move) return
     }
 
-    const piece = gameRef.current.get(square)
-    if (piece && piece.color === (playerColor === 'white' ? 'w' : 'b')) {
-      setSelectedSquare(square)
+    const currentPiece = gameRef.current.get(squareTyped)
+    if (currentPiece && currentPiece.color === (playerColor === 'white' ? 'w' : 'b')) {
+      setSelectedSquare(squareTyped)
     } else {
       setSelectedSquare(null)
     }
@@ -875,7 +883,23 @@ function App() {
     }
   }, [analysisMode, fenToShow])
 
-  const gameInProgress = history.length > 0 && !gameOver
+  const boardTheme = BOARD_THEMES[boardThemeKey] ?? BOARD_THEMES.green
+  const appThemeStyle = useMemo(
+    () =>
+      ({
+        '--square-light': boardTheme.light,
+        '--square-dark': boardTheme.dark,
+      }) as CSSProperties,
+    [boardTheme],
+  )
+  const remainingTakebacks =
+    takebackLimit === Infinity ? Infinity : Math.max(0, takebackLimit - takebacksUsed)
+  const canTakeback =
+    gameStarted &&
+    !analysisMode &&
+    !engineThinking &&
+    history.length > 0 &&
+    (takebackLimit === Infinity || takebacksUsed < takebackLimit)
   const promotionPieceTypes = useMemo(() => {
     const colorPrefix = playerColor === 'white' ? 'w' : 'b'
     return (['q', 'r', 'b', 'n'] as PieceSymbol[]).map((piece) => ({
@@ -969,8 +993,28 @@ function App() {
     )
   }
 
+  const handleTakeback = () => {
+    if (!canTakeback) return
+    let undone = 0
+    while (undone < 2 && gameRef.current.history().length > 0) {
+      const move = gameRef.current.undo()
+      if (!move) break
+      undone += 1
+    }
+    if (undone === 0) return
+    setBoardFen(gameRef.current.fen())
+    setHistory(gameRef.current.history())
+    setHistoryVerbose(gameRef.current.history({ verbose: true }) as Move[])
+    setGameOver(null)
+    setShowGameOverDialog(false)
+    setSelectedSquare(null)
+    setPendingPromotion(null)
+    setEngineThinking(false)
+    setTakebacksUsed((prev) => prev + 1)
+  }
+
   return (
-    <div className="app-container">
+    <div className="app-container" style={appThemeStyle}>
       <nav className="sidebar">
         <div className="sidebar-header">
           <p className="eyebrow">Local Stockfish 17.1</p>
@@ -995,6 +1039,18 @@ function App() {
               disabled={!analysisMode && (!engineReady || !analysisAvailable || engineThinking)}
             >
               {analysisMode ? 'Exit Analysis' : 'Analyze Game'}
+            </button>
+            <button
+              className="ghost"
+              onClick={handleTakeback}
+              disabled={!canTakeback}
+              title={
+                canTakeback
+                  ? `Takebacks remaining: ${remainingTakebacks === Infinity ? 'Unlimited' : remainingTakebacks}`
+                  : 'No takebacks available'
+              }
+            >
+              Take Back{remainingTakebacks === Infinity ? '' : ` (${remainingTakebacks})`}
             </button>
           </div>
 
@@ -1233,6 +1289,20 @@ function App() {
           </div>
         </div>
       )}
+
+      <button className="settings-fab" onClick={() => setSettingsOpen(true)} title="Settings">
+        <SettingsIcon size={24} />
+      </button>
+
+      <Settings
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        boardTheme={boardThemeKey}
+        onBoardThemeChange={setBoardThemeKey}
+        takebackLimit={takebackLimit}
+        onTakebackLimitChange={setTakebackLimit}
+        takebacksUsed={takebacksUsed}
+      />
     </div>
   )
 }
