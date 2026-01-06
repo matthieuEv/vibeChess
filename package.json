@@ -1,7 +1,7 @@
 {
   "name":  "vibe-chess",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "A lightweight web chess app with Stockfish analysis",
   "author": "matthieuEv <contact@matthieu.ev.com>",
   "type": "module",
