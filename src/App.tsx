@@ -1132,6 +1132,9 @@ function App() {
             <span className="status-text" style={{ fontSize: 12 }}>
               {!engineReady ? engineStatus : 'Engine Ready'}
             </span>
+            <button className="settings-button" onClick={() => setSettingsOpen(true)} title="Settings">
+              <SettingsIcon size={20} />
+            </button>
           </div>
         </div>
       </nav>
@@ -1295,10 +1298,6 @@ function App() {
           </div>
         </div>
       )}
-
-      <button className="settings-fab" onClick={() => setSettingsOpen(true)} title="Settings">
-        <SettingsIcon size={24} />
-      </button>
 
       <Settings
         isOpen={settingsOpen}
