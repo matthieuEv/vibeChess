@@ -10,6 +10,7 @@ import {
 } from './chessHelpers'
 
 type PlayerColor = 'white' | 'black'
+type ColorChoice = PlayerColor | 'random'
 
 type Suggestion = {
   uci: string
@@ -140,6 +141,8 @@ function App() {
   const analysisGameRef = useRef<Chess | null>(null)
   const [boardFen, setBoardFen] = useState(gameRef.current.fen())
   const [playerColor, setPlayerColor] = useState<PlayerColor>('white')
+  const [colorChoice, setColorChoice] = useState<ColorChoice>('white')
+  const [gameStarted, setGameStarted] = useState(false)
   const [engineReady, setEngineReady] = useState(false)
   const [engineStatus, setEngineStatus] = useState('Starting Stockfish...')
   const [elo, setElo] = useState(1600)
@@ -455,6 +458,19 @@ function App() {
     return true
   }
 
+  const stopGame = useCallback(() => {
+    if (engineBusyRef.current) {
+      sendEngine('stop')
+    }
+    analysisRequestIdRef.current++
+    setGameOver(null)
+    setShowGameOverDialog(false)
+    setEngineThinking(false)
+    setGameStarted(false)
+    setPendingPromotion(null)
+    setSelectedSquare(null)
+  }, [sendEngine])
+
   const startNewGame = useCallback((color: PlayerColor = 'white') => {
     // Stop any running analysis
     if (engineBusyRef.current) {
@@ -500,6 +516,7 @@ function App() {
     setAnalysisLoading(false)
     setAnalysisError(null)
     setPendingPromotion(null)
+    setGameStarted(true)
     analysisGameRef.current = null
     analysisCacheRef.current.clear()
   }, [])
@@ -526,7 +543,7 @@ function App() {
     if (analysisMode) {
       return makeAnalysisMove(sourceSquare, targetSquare)
     }
-    if (gameOver || engineThinking || pendingPromotion) return false
+    if (!gameStarted || gameOver || engineThinking || pendingPromotion) return false
     if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return false
 
     try {
@@ -565,7 +582,7 @@ function App() {
       return
     }
 
-    if (gameOver || engineThinking) return
+    if (!gameStarted || gameOver || engineThinking) return
     if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return
 
     if (selectedSquare) {
@@ -697,13 +714,14 @@ function App() {
   useEffect(() => {
     if (gameOver) {
       setShowGameOverDialog(true)
+      setGameStarted(false)
     } else {
       setShowGameOverDialog(false)
     }
   }, [gameOver])
 
   useEffect(() => {
-    if (gameOver || !engineReady || analysisMode || engineThinking) return
+    if (!gameStarted || gameOver || !engineReady || analysisMode || engineThinking) return
     if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) {
       setEngineThinking(true)
       requestWeakOrBestMove(gameRef.current.fen(), elo).then((move) => {
@@ -731,7 +749,7 @@ function App() {
         setEngineThinking(false)
       })
     }
-  }, [boardFen, engineReady, gameOver, analysisMode, playerColor, elo, requestWeakOrBestMove])
+  }, [boardFen, engineReady, gameOver, analysisMode, gameStarted, playerColor, elo, requestWeakOrBestMove])
 
   const turnText = useMemo(() => {
     if (analysisMode) {
@@ -751,18 +769,25 @@ function App() {
       }
     }
 
+    if (!gameStarted) return 'Choose your color, then start the game'
     if (gameOver) return gameOver
     if (!engineReady) return 'Engine getting ready...'
     if (engineThinking) return 'Stockfish is thinking...'
     const turn = gameRef.current.turn() === 'w' ? 'White' : 'Black'
     const checkText = isInCheck ? ' (Check!)' : ''
     return `${turn} to move${checkText}`
-  }, [analysisMode, fenToShow, analysisEntries, analysisIndex, engineReady, engineThinking, gameOver, isInCheck])
+  }, [analysisMode, fenToShow, analysisEntries, analysisIndex, engineReady, engineThinking, gameStarted, gameOver, isInCheck])
 
-  const handleColorChange = (color: PlayerColor) => {
+  const startGameFromSelection = useCallback(() => {
+    const resolvedColor =
+      colorChoice === 'random' ? (Math.random() < 0.5 ? 'white' : 'black') : colorChoice
+    startNewGame(resolvedColor)
+  }, [colorChoice, startNewGame])
+
+  const handleColorChange = (color: ColorChoice) => {
     if (DEBUG_MODE) return
-    if (color === playerColor) return
-    startNewGame(color)
+    if (gameStarted) return
+    setColorChoice(color)
   }
 
   const formattedHistory = useMemo(() => {
@@ -957,8 +982,12 @@ function App() {
 
         <div className="sidebar-menu">
           <div className="menu-group">
-            <button className="primary" onClick={() => startNewGame()} disabled={!engineReady}>
-              New Game
+            <button
+              className={gameStarted ? 'danger' : 'primary'}
+              onClick={gameStarted ? stopGame : startGameFromSelection}
+              disabled={!engineReady}
+            >
+              {gameStarted ? 'Stop the Game' : 'Start Game'}
             </button>
             <button
               className="ghost"
@@ -979,8 +1008,8 @@ function App() {
                 step={50}
                 value={elo}
                 onChange={(e) => setElo(Number(e.target.value))}
-                disabled={history.length > 0}
-                title={history.length > 0 ? "Start a new game to change difficulty" : "Adjust difficulty"}
+                disabled={gameStarted}
+                title={gameStarted ? "Stop the game to change difficulty" : "Adjust difficulty"}
               />
               <div className="slider-values">
                 <span>600</span>
@@ -999,8 +1028,8 @@ function App() {
                     const clamped = Math.min(2800, Math.max(600, elo))
                     setElo(clamped)
                   }}
-                  disabled={history.length > 0}
-                  title={history.length > 0 ? "Start a new game to change difficulty" : "Type to adjust ELO"}
+                  disabled={gameStarted}
+                  title={gameStarted ? "Stop the game to change difficulty" : "Type to adjust ELO"}
                 />
                 <span>2800</span>
               </div>
@@ -1011,18 +1040,25 @@ function App() {
             <p className="label">Your Color</p>
             <div className="toggle">
               <button
-                className={playerColor === 'white' ? 'active' : ''}
+                className={colorChoice === 'white' ? 'active' : ''}
                 onClick={() => handleColorChange('white')}
-                disabled={gameInProgress || DEBUG_MODE}
+                disabled={gameStarted || DEBUG_MODE}
               >
                 White
               </button>
               <button
-                className={playerColor === 'black' ? 'active' : ''}
+                className={colorChoice === 'black' ? 'active' : ''}
                 onClick={() => handleColorChange('black')}
-                disabled={gameInProgress || DEBUG_MODE}
+                disabled={gameStarted || DEBUG_MODE}
               >
                 Black
+              </button>
+              <button
+                className={colorChoice === 'random' ? 'active' : ''}
+                onClick={() => handleColorChange('random')}
+                disabled={gameStarted || DEBUG_MODE}
+              >
+                Random
               </button>
             </div>
           </div>
@@ -1046,7 +1082,7 @@ function App() {
                 id: 'vs-stockfish',
                 position: fenToShow,
                 boardOrientation: playerColor,
-                allowDragging: analysisMode || (!engineThinking && !gameOver),
+                allowDragging: analysisMode || (gameStarted && !engineThinking && !gameOver),
                 boardStyle: {
                   width: '100%',
                   height: '100%',
@@ -1160,8 +1196,8 @@ function App() {
             <h2>Game Over</h2>
             <p>{gameOver}</p>
             <div className="modal-actions">
-              <button className="primary" onClick={() => startNewGame(playerColor)}>
-                New Game
+              <button className="primary" onClick={startGameFromSelection}>
+                Start Game
               </button>
               <button className="ghost" onClick={() => setShowGameOverDialog(false)}>
                 View Board

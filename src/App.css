@@ -100,6 +100,7 @@ h1 {
 
 /* Components: Buttons */
 .primary,
+.danger,
 .ghost {
   border-radius: 8px;
   padding: 10px 16px;
@@ -118,7 +119,14 @@ h1 {
   color: #03150f;
 }
 
+.danger {
+  background: linear-gradient(120deg, #ff6b6b, #e54848);
+  border-color: transparent;
+  color: #1a0000;
+}
+
 .primary:disabled,
+.danger:disabled,
 .ghost:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -134,6 +142,7 @@ h1 {
 }
 
 .primary:hover:not(:disabled),
+.danger:hover:not(:disabled),
 .ghost:hover:not(:disabled) {
   transform: translateY(-1px);
   border-color: rgba(255, 255, 255, 0.16);
