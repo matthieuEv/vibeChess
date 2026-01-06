@@ -573,7 +573,7 @@ function App() {
     }
   }
 
-  const handleSquareClick = (arg: any) => {
+  const handleSquareClick = (arg: Square | { square: Square }) => {
     if (pendingPromotion) return
     const square = (typeof arg === 'string' ? arg : arg.square) as Square
     if (analysisMode) {
