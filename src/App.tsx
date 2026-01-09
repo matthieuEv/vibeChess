@@ -1,18 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { Chess, SQUARES } from 'chess.js'
+import { Chess } from 'chess.js'
 import type { Move, PieceSymbol, Square } from 'chess.js'
 import { Chessboard, defaultPieces } from 'react-chessboard'
-import { Settings as SettingsIcon } from 'lucide-react'
 import './App.css'
 import {
   buildAnalysisEntriesFromVerbose,
   type AnalysisEntry,
 } from './chessHelpers'
+import AnalysisArrowLayer, { type ArrowToDraw } from './components/AnalysisArrowLayer'
+import InfoPanel from './components/InfoPanel'
+import Sidebar from './components/Sidebar'
+import { type ColorChoice, type PlayerColor } from './chess/types'
+import { buildGameOverText, clamp, findKingSquare, isPlayerVictory, uciToSan } from './chess/utils'
+import {
+  getMaiaEngine,
+  MAIA_DEFAULT_ELO,
+  snapMaiaElo,
+  type MaiaElo,
+  type MaiaEngine,
+} from './engine/maiaEngine'
 import Settings, { BOARD_THEMES, type BoardThemeKey } from './Settings'
-
-type PlayerColor = 'white' | 'black'
-type ColorChoice = PlayerColor | 'random'
 
 type Suggestion = {
   uci: string
@@ -22,83 +30,15 @@ type Suggestion = {
   san: string
 }
 
-type ArrowToDraw = {
-  from: Square
-  to: Square
-  color: string
-  width: number
-  opacity?: number
-}
-
 type PendingPromotion = {
   from: Square
   to: Square
 }
 
-const ENGINE_PATH = './engine/stockfish-17.1-lite-single-03e3232.js'
-const THINK_TIME_MS = 1200
-const ENGINE_MIN_ELO = 1320 // Stockfish UCI_Elo floor is around 1320
-const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
-
-const computeSkillLevel = (elo: number) => {
-  // SkillLevel 0-20
-  const scaled = Math.round(((elo - 600) / (2800 - 600)) * 20)
-  return clamp(scaled, 0, 20)
-}
-
-const computeBlunderProbability = (elo: number) => {
-  // Lower elo => more blunders.
-  // 600 ELO should be very blunder-prone (e.g. ~80% chance to play sub-optimally)
-  if (elo >= 1600) return 0.02
-  const t = clamp((1600 - elo) / 1000, 0, 1) // 600 => 1, 1600 => 0
-  // Scale from 0.05 (at 1600) to 0.80 (at 600)
-  return 0.05 + t * 0.75
-}
-
-const uciToSan = (fen: string, uci: string) => {
-  try {
-    const chess = new Chess(fen)
-    const move = chess.move({
-      from: uci.slice(0, 2) as Square,
-      to: uci.slice(2, 4) as Square,
-      promotion: uci[4] as PieceSymbol | undefined,
-    })
-    return move?.san ?? uci
-  } catch {
-    return uci
-  }
-}
-
-const buildGameOverText = (game: Chess) => {
-  if (game.isCheckmate()) {
-    return `${game.turn() === 'w' ? 'Black' : 'White'} wins by checkmate`
-  }
-  if (game.isStalemate()) return 'Stalemate'
-  if (game.isThreefoldRepetition()) return 'Draw by repetition'
-  if (game.isInsufficientMaterial()) return 'Draw (insufficient material)'
-  if (game.isDraw()) return 'Draw'
-  return null
-}
-
-const isPlayerVictory = (game: Chess, playerColor: PlayerColor) => {
-  if (!game.isCheckmate()) return false
-  const winner = game.turn() === 'w' ? 'black' : 'white'
-  return winner === playerColor
-}
-
-const findKingSquare = (game: Chess, color: 'w' | 'b'): Square | null => {
-  for (const sq of SQUARES) {
-    const piece = game.get(sq)
-    if (piece && piece.type === 'k' && piece.color === color) {
-      return sq
-    }
-  }
-  return null
-}
-
+const STOCKFISH_ENGINE_PATH = './engine/stockfish-17.1-lite-single-03e3232.js'
+const ANALYSIS_THINK_TIME_MS = 1200
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_DEBUG === '1'
 const DEBUG_FEN_STORAGE_KEY = 'vibeChess.debug-fen'
-
 const getCachedDebugFen = () => {
   if (!DEBUG_MODE) return null
   try {
@@ -107,7 +47,6 @@ const getCachedDebugFen = () => {
     return null
   }
 }
-
 const storeDebugFen = (fen: string) => {
   if (!DEBUG_MODE) return
   try {
@@ -116,7 +55,6 @@ const storeDebugFen = (fen: string) => {
     // Ignore storage failures in debug mode.
   }
 }
-
 const createGameFromFen = (fen: string) => {
   try {
     const game = new Chess()
@@ -141,9 +79,6 @@ const promptForDebugFen = (fallbackFen: string) => {
   return game.fen()
 }
 
-
-
-
 function App() {
   const gameRef = useRef(new Chess())
   const analysisGameRef = useRef<Chess | null>(null)
@@ -151,9 +86,11 @@ function App() {
   const [playerColor, setPlayerColor] = useState<PlayerColor>('white')
   const [colorChoice, setColorChoice] = useState<ColorChoice>('white')
   const [gameStarted, setGameStarted] = useState(false)
-  const [engineReady, setEngineReady] = useState(false)
-  const [engineStatus, setEngineStatus] = useState('Starting Stockfish...')
-  const [elo, setElo] = useState(1600)
+  const [botEngineReady, setBotEngineReady] = useState(false)
+  const [botEngineStatus, setBotEngineStatus] = useState('Starting Maia...')
+  const [analysisEngineReady, setAnalysisEngineReady] = useState(false)
+  const [analysisEngineStatus, setAnalysisEngineStatus] = useState('Stockfish idle')
+  const [elo, setElo] = useState<MaiaElo>(MAIA_DEFAULT_ELO)
   const [history, setHistory] = useState<string[]>([])
   const [historyVerbose, setHistoryVerbose] = useState<Move[]>([])
   const [engineThinking, setEngineThinking] = useState(false)
@@ -176,14 +113,17 @@ function App() {
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
 
-  const workerRef = useRef<Worker | null>(null)
-  const readyResolvers = useRef<(() => void)[]>([])
-  const bestResolver = useRef<((line: string) => void) | null>(null)
-  const infoHandler = useRef<((line: string) => void) | null>(null)
+  const analysisWorkerRef = useRef<Worker | null>(null)
+  const analysisReadyResolvers = useRef<(() => void)[]>([])
+  const analysisBestResolver = useRef<((line: string) => void) | null>(null)
+  const analysisInfoHandler = useRef<((line: string) => void) | null>(null)
+  const analysisInitPromiseRef = useRef<Promise<void> | null>(null)
+  const maiaEngineRef = useRef<MaiaEngine | null>(null)
   const boardShellRef = useRef<HTMLDivElement>(null)
   const analysisCacheRef = useRef<Map<string, Suggestion[]>>(new Map())
   const lastRequestedFenRef = useRef<string | null>(null)
-  const engineBusyRef = useRef(false)
+  const analysisBusyRef = useRef(false)
+  const botRequestIdRef = useRef(0)
   const analysisRequestIdRef = useRef(0)
   const debugInitializedRef = useRef(false)
 
@@ -194,7 +134,7 @@ function App() {
   }, [])
 
   const sendEngine = useCallback((cmd: string) => {
-    const worker = workerRef.current
+    const worker = analysisWorkerRef.current
     if (!worker) return
     logEngine('>>', cmd)
     worker.postMessage(cmd)
@@ -214,27 +154,107 @@ function App() {
     setSelectedSquare(null)
   }, [])
 
-  const waitForReady = useCallback(() =>
+  const waitForAnalysisReady = useCallback(() =>
     new Promise<void>((resolve) => {
-      if (!workerRef.current) return resolve()
-      readyResolvers.current.push(resolve)
+      if (!analysisWorkerRef.current) return resolve()
+      analysisReadyResolvers.current.push(resolve)
       sendEngine('isready')
     }), [sendEngine])
 
-  const waitForEngineIdle = useCallback(async () => {
-    while (engineBusyRef.current) {
+  const waitForAnalysisIdle = useCallback(async () => {
+    while (analysisBusyRef.current) {
       await new Promise((r) => setTimeout(r, 50))
     }
   }, [])
 
+  const initAnalysisEngine = useCallback(() => {
+    if (analysisEngineReady && analysisWorkerRef.current) {
+      return Promise.resolve()
+    }
+    if (analysisInitPromiseRef.current) {
+      return analysisInitPromiseRef.current
+    }
+
+    setAnalysisEngineStatus('Starting Stockfish...')
+    analysisInitPromiseRef.current = new Promise<void>((resolve, reject) => {
+      let settled = false
+
+      const failInit = (err: unknown) => {
+        if (settled) return
+        settled = true
+        console.error(err)
+        setAnalysisEngineStatus('Stockfish failed to start')
+        analysisInitPromiseRef.current = null
+        reject(err)
+      }
+
+      try {
+        const worker = new Worker(STOCKFISH_ENGINE_PATH)
+        analysisWorkerRef.current = worker
+
+        worker.onerror = (event) => {
+          failInit(event)
+        }
+
+        worker.onmessageerror = (event) => {
+          failInit(event)
+        }
+
+        worker.onmessage = (event: MessageEvent) => {
+          const line =
+            typeof event.data === 'string' ? event.data : event.data?.toString?.() ?? ''
+          if (!line) return
+
+          logEngine('<<', line)
+
+          if (line === 'uciok') {
+            setAnalysisEngineStatus('Configuring engine...')
+            return
+          }
+
+          if (line === 'readyok') {
+            const resolvers = analysisReadyResolvers.current
+            analysisReadyResolvers.current = []
+            resolvers.forEach((resolveReady) => resolveReady())
+            setAnalysisEngineReady(true)
+            setAnalysisEngineStatus('Stockfish ready')
+            if (!settled) {
+              settled = true
+              resolve()
+            }
+            return
+          }
+
+          if (line.startsWith('info') && analysisInfoHandler.current) {
+            analysisInfoHandler.current(line)
+          }
+
+          if (line.startsWith('bestmove')) {
+            analysisBestResolver.current?.(line)
+            analysisBestResolver.current = null
+            analysisInfoHandler.current = null
+          }
+        }
+
+        sendEngine('uci')
+        sendEngine('setoption name Threads value 1')
+        sendEngine('isready')
+      } catch (err) {
+        failInit(err)
+      }
+    })
+
+    return analysisInitPromiseRef.current
+  }, [analysisEngineReady, logEngine, sendEngine])
+
   const requestMultiSuggestions = useCallback(async (fen: string, multiPv = 3, requestId?: number) => {
     const suggestions: Suggestion[] = []
-    if (!workerRef.current) return suggestions
+    if (!analysisWorkerRef.current) return suggestions
     
     // If we are preempted before even starting
     if (requestId !== undefined && analysisRequestIdRef.current !== requestId) return []
 
-    await waitForReady()
+    await waitForAnalysisReady()
 
     // Double check after waiting
     if (requestId !== undefined && analysisRequestIdRef.current !== requestId) return []
@@ -242,7 +262,7 @@ function App() {
     sendEngine(`setoption name MultiPV value ${multiPv}`)
     sendEngine(`position fen ${fen}`)
 
-    infoHandler.current = (line: string) => {
+    analysisInfoHandler.current = (line: string) => {
       const multiMatch = line.match(
         /multipv\s+(\d+).*score\s+(cp|mate)\s+(-?\d+).*pv\s+([a-h][1-8][a-h][1-8][qrbn]?)/,
       )
@@ -260,16 +280,16 @@ function App() {
     }
 
     const bestPromise = new Promise<void>((resolve) => {
-      bestResolver.current = () => resolve()
+      analysisBestResolver.current = () => resolve()
     })
 
-    engineBusyRef.current = true
-    sendEngine(`go movetime ${THINK_TIME_MS}`)
+    analysisBusyRef.current = true
+    sendEngine(`go movetime ${ANALYSIS_THINK_TIME_MS}`)
     await bestPromise
-    engineBusyRef.current = false
+    analysisBusyRef.current = false
 
-    infoHandler.current = null
-    bestResolver.current = null
+    analysisInfoHandler.current = null
+    analysisBestResolver.current = null
 
     // If we were preempted, don't do cleanup or return potentially partial results if we want strictness.
     // But returning partial results is usually fine. The important thing is skipping cleanup if another request took over.
@@ -277,14 +297,14 @@ function App() {
       return suggestions.filter(Boolean).sort((a, b) => b.score - a.score)
     }
 
-    await waitForReady()
+    await waitForAnalysisReady()
     sendEngine('setoption name MultiPV value 1')
 
     return suggestions.filter(Boolean).sort((a, b) => b.score - a.score)
-  }, [sendEngine, waitForReady])
+  }, [sendEngine, waitForAnalysisReady])
 
   const loadAnalysisSuggestions = useCallback(async (fen: string) => {
-    if (!engineReady || !workerRef.current) {
+    if (!analysisEngineReady || !analysisWorkerRef.current) {
       setAnalysisLoading(false)
       return
     }
@@ -305,12 +325,12 @@ function App() {
     lastRequestedFenRef.current = fen
 
     // If engine is busy, stop it
-    if (engineBusyRef.current) {
+    if (analysisBusyRef.current) {
       sendEngine('stop')
     }
 
     // Wait for it to be free
-    await waitForEngineIdle()
+    await waitForAnalysisIdle()
 
     // If another request came in while we were waiting, abort this one
     if (analysisRequestIdRef.current !== requestId) return
@@ -335,73 +355,18 @@ function App() {
         setAnalysisLoading(false)
       }
     }
-  }, [engineReady, requestMultiSuggestions, sendEngine, waitForEngineIdle])
+  }, [analysisEngineReady, requestMultiSuggestions, sendEngine, waitForAnalysisIdle])
 
-  const applyEngineStrength = useCallback((eloValue: number) => {
-    const skill = computeSkillLevel(eloValue)
-    const engineElo = Math.max(ENGINE_MIN_ELO, eloValue)
-    sendEngine('setoption name UCI_LimitStrength value true')
-    sendEngine(`setoption name UCI_Elo value ${engineElo}`)
-    sendEngine(`setoption name Skill Level value ${skill}`)
-  }, [sendEngine])
-
-  const requestBestMove = async (fen: string) => {
-    if (!workerRef.current) return null
-    await waitForReady()
-    sendEngine(`position fen ${fen}`)
-
-    const bestMovePromise = new Promise<string>((resolve) => {
-      bestResolver.current = (line: string) => {
-        const match = line.match(/bestmove\s+(\S+)/)
-        resolve(match?.[1] ?? '')
-      }
-    })
-
-    engineBusyRef.current = true
-    sendEngine(`go movetime ${THINK_TIME_MS}`)
-    const move = await bestMovePromise
-    engineBusyRef.current = false
-    return move || null
-  }
-
-  const pickMoveWithBlunder = (fen: string, options: Suggestion[], blunderProb: number) => {
-    if (!options.length) return null
-
-    const rand = Math.random()
-    const chess = new Chess(fen)
-    const legalMoves = chess.moves({ verbose: true }) as Move[]
-
-    // Occasionally play a totally random move to simulate real blunders
-    // For 600 ELO (blunderProb ~0.8), this is ~32% chance of a random move
-    if (rand < blunderProb * 0.4 && legalMoves.length) {
-      const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)]
-      return `${randomMove.from}${randomMove.to}${randomMove.promotion ?? ''}`
-    }
-
-    // Otherwise pick a weaker option among the best three
-    if (rand < blunderProb && options.length >= 2) {
-      if (rand < blunderProb * 0.7 && options.length >= 3) {
-        return options[options.length - 1].uci // worst of the top 3
-      }
-      return options[1].uci // second best
-    }
-
-    return options[0].uci
-  }
-
-  const requestWeakOrBestMove = async (fen: string, eloValue: number) => {
-    const blunderProb = computeBlunderProbability(eloValue)
-    if (blunderProb <= 0.03) {
-      return requestBestMove(fen)
-    }
-
-    const suggestions = await requestMultiSuggestions(fen, 3)
-    const picked = pickMoveWithBlunder(fen, suggestions, blunderProb)
-    return picked ?? (await requestBestMove(fen))
-  }
+  const requestMaiaMove = useCallback(async (fen: string, eloValue: MaiaElo) => {
+    if (!maiaEngineRef.current) return null
+    return maiaEngineRef.current.getBestMove(fen, eloValue)
+  }, [])
 
   const enterAnalysisMode = () => {
-    if (!engineReady || !history.length) return
+    if (!history.length) return
+    void initAnalysisEngine().catch(() => {
+      setAnalysisError('Stockfish failed to start.')
+    })
     try {
       const entries = buildAnalysisEntries()
       if (!entries.length) return
@@ -471,9 +436,11 @@ function App() {
   }
 
   const stopGame = useCallback(() => {
-    if (engineBusyRef.current) {
+    if (analysisBusyRef.current) {
       sendEngine('stop')
     }
+    botRequestIdRef.current++
+    maiaEngineRef.current?.stop()
     analysisRequestIdRef.current++
     setGameOver(null)
     setShowGameOverDialog(false)
@@ -486,9 +453,11 @@ function App() {
 
   const startNewGame = useCallback((color: PlayerColor = 'white') => {
     // Stop any running analysis
-    if (engineBusyRef.current) {
+    if (analysisBusyRef.current) {
       sendEngine('stop')
     }
+    botRequestIdRef.current++
+    maiaEngineRef.current?.stop()
     // Invalidate pending analysis requests
     analysisRequestIdRef.current++
 
@@ -533,7 +502,7 @@ function App() {
     setTakebacksUsed(0)
     analysisGameRef.current = null
     analysisCacheRef.current.clear()
-  }, [])
+  }, [sendEngine])
 
   const getPromotionMove = (game: Chess, from: Square, to: Square) => {
     const legalMoves = game.moves({ verbose: true }) as Move[]
@@ -655,55 +624,36 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    const worker = new Worker(ENGINE_PATH)
-    workerRef.current = worker
-
-    worker.onmessage = (event: MessageEvent) => {
-      const line = typeof event.data === 'string' ? event.data : event.data?.toString?.() ?? ''
-      if (!line) return
-
-      logEngine('<<', line)
-
-      if (line === 'uciok') {
-        setEngineStatus('Configuring engine...')
-        return
-      }
-
-      if (line === 'readyok') {
-        const resolvers = readyResolvers.current
-        readyResolvers.current = []
-        resolvers.forEach((resolve) => resolve())
-        setEngineReady(true)
-        setEngineStatus('Engine ready')
-        return
-      }
-
-      if (line.startsWith('info') && infoHandler.current) {
-        infoHandler.current(line)
-      }
-
-      if (line.startsWith('bestmove')) {
-        bestResolver.current?.(line)
-        bestResolver.current = null
-        infoHandler.current = null
-      }
-    }
-
-    sendEngine('uci')
-    sendEngine('setoption name Threads value 1')
-    applyEngineStrength(elo)
-    sendEngine('isready')
-
-    return () => worker.terminate()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => {
+    analysisWorkerRef.current?.terminate()
   }, [])
 
   useEffect(() => {
-    if (!engineReady || !workerRef.current || engineThinking) return
-    applyEngineStrength(elo)
-    sendEngine('isready')
-  }, [elo, engineReady, applyEngineStrength, sendEngine, engineThinking])
+    let cancelled = false
+    getMaiaEngine()
+      .then((engine) => {
+        if (cancelled) {
+          engine.stop()
+          return
+        }
+        maiaEngineRef.current = engine
+        setBotEngineReady(true)
+        setBotEngineStatus('Maia ready')
+      })
+      .catch((err) => {
+        console.error(err)
+        if (!cancelled) {
+          const message =
+            err instanceof Error ? `Maia failed to start: ${err.message}` : 'Maia failed to start'
+          setBotEngineStatus(message)
+        }
+      })
+
+    return () => {
+      cancelled = true
+      maiaEngineRef.current?.stop()
+    }
+  }, [])
 
   useEffect(() => {
     if (!analysisMode || !analysisBoardFen) return
@@ -735,35 +685,52 @@ function App() {
   }, [gameOver])
 
   useEffect(() => {
-    if (!gameStarted || gameOver || !engineReady || analysisMode || engineThinking) return
+    if (!gameStarted || gameOver || !botEngineReady || analysisMode || engineThinking) return
     if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) {
+      if (!maiaEngineRef.current) return
       setEngineThinking(true)
-      requestWeakOrBestMove(gameRef.current.fen(), elo).then((move) => {
-        if (move) {
-          try {
-            const promotion = move.length > 4 ? (move[4] as PieceSymbol) : undefined
-            if (promotion) {
-              console.info('[Stockfish]', 'Promotion chosen:', promotion, 'with', move)
-            }
-            gameRef.current.move({
-              from: move.slice(0, 2) as Square,
-              to: move.slice(2, 4) as Square,
-              promotion,
-            })
-            setBoardFen(gameRef.current.fen())
-            setHistory(gameRef.current.history())
-            setHistoryVerbose(gameRef.current.history({ verbose: true }) as Move[])
+      const requestId = ++botRequestIdRef.current
+      const snappedElo = snapMaiaElo(elo)
+      requestMaiaMove(gameRef.current.fen(), snappedElo)
+        .then((move) => {
+          if (botRequestIdRef.current !== requestId) return
+          if (move) {
+            try {
+              const promotion = move.length > 4 ? (move[4] as PieceSymbol) : undefined
+              if (promotion) {
+                console.info('[Maia]', 'Promotion chosen:', promotion, 'with', move)
+              }
+              gameRef.current.move({
+                from: move.slice(0, 2) as Square,
+                to: move.slice(2, 4) as Square,
+                promotion,
+              })
+              setBoardFen(gameRef.current.fen())
+              setHistory(gameRef.current.history())
+              setHistoryVerbose(gameRef.current.history({ verbose: true }) as Move[])
 
-            const over = buildGameOverText(gameRef.current)
-            if (over) setGameOver(over)
-          } catch (e) {
-            console.error('Engine made invalid move:', move, e)
+              const over = buildGameOverText(gameRef.current)
+              if (over) setGameOver(over)
+            } catch (e) {
+              console.error('Maia made invalid move:', move, e)
+            }
           }
-        }
-        setEngineThinking(false)
-      })
+        })
+        .catch((err) => {
+          console.error(err)
+          const message = err instanceof Error ? err.message : String(err)
+          if (message.toLowerCase().includes('oom')) {
+            setBotEngineStatus('Maia crashed (OOM). Reload the app to recover.')
+            setBotEngineReady(false)
+          }
+        })
+        .finally(() => {
+          if (botRequestIdRef.current === requestId) {
+            setEngineThinking(false)
+          }
+        })
     }
-  }, [boardFen, engineReady, gameOver, analysisMode, gameStarted, playerColor, elo, requestWeakOrBestMove])
+  }, [boardFen, botEngineReady, gameOver, analysisMode, gameStarted, playerColor, elo, requestMaiaMove, engineThinking])
 
   const turnText = useMemo(() => {
     if (analysisMode) {
@@ -785,12 +752,18 @@ function App() {
 
     if (!gameStarted) return 'Choose your color, then start the game'
     if (gameOver) return gameOver
-    if (!engineReady) return 'Engine getting ready...'
-    if (engineThinking) return 'Stockfish is thinking...'
+    if (!botEngineReady) return 'Maia getting ready...'
+    if (engineThinking) return 'Maia is thinking...'
     const turn = gameRef.current.turn() === 'w' ? 'White' : 'Black'
     const checkText = isInCheck ? ' (Check!)' : ''
     return `${turn} to move${checkText}`
-  }, [analysisMode, fenToShow, analysisEntries, analysisIndex, engineReady, engineThinking, gameStarted, gameOver, isInCheck])
+  }, [analysisMode, fenToShow, analysisEntries, analysisIndex, botEngineReady, engineThinking, gameStarted, gameOver, isInCheck])
+
+  const statusText = useMemo(() => {
+    if (!botEngineReady) return botEngineStatus
+    if (!analysisEngineReady) return `Maia ready - ${analysisEngineStatus}`
+    return 'Engines ready'
+  }, [analysisEngineReady, analysisEngineStatus, botEngineReady, botEngineStatus])
 
   const startGameFromSelection = useCallback(() => {
     const resolvedColor =
@@ -802,6 +775,10 @@ function App() {
     if (DEBUG_MODE) return
     if (gameStarted) return
     setColorChoice(color)
+  }
+
+  const handleEloChange = (value: number) => {
+    setElo(snapMaiaElo(value))
   }
 
   const formattedHistory = useMemo(() => {
@@ -914,91 +891,6 @@ function App() {
     }))
   }, [playerColor])
 
-  const AnalysisArrowLayer = ({ arrows }: { arrows: ArrowToDraw[] }) => {
-    if (!arrows.length) return null
-    const squareSize = boardSize / 8
-    const getCenter = (square: Square) => {
-      const file = square.charCodeAt(0) - 97
-      const rank = Number(square[1]) - 1
-      if (file < 0 || file > 7 || rank < 0 || rank > 7) return null
-
-      const xIndex = playerColor === 'white' ? file : 7 - file
-      const yIndex = playerColor === 'white' ? 7 - rank : rank
-
-      return {
-        x: xIndex * squareSize + squareSize / 2,
-        y: yIndex * squareSize + squareSize / 2,
-      }
-    }
-
-    return (
-      <svg
-        className="analysis-arrow-canvas"
-        width={boardSize}
-        height={boardSize}
-        viewBox={`0 0 ${boardSize} ${boardSize}`}
-        style={{ pointerEvents: 'none' }}
-      >
-        {arrows.map((arrow, idx) => {
-          const from = getCenter(arrow.from)
-          const to = getCenter(arrow.to)
-          if (!from || !to) return null
-
-          const dx = to.x - from.x
-          const dy = to.y - from.y
-          const len = Math.sqrt(dx * dx + dy * dy)
-          if (len === 0) return null
-
-          const width = arrow.width
-          const headLength = width * 3
-          const headWidth = width * 2.4
-          
-          // Shorten slightly for aesthetics
-          const margin = squareSize * 0.22
-          const actualLen = Math.max(0, len - margin)
-          
-          if (actualLen < headLength) return null
-
-          const uX = dx / len
-          const uY = dy / len
-          
-          const tipX = from.x + uX * actualLen
-          const tipY = from.y + uY * actualLen
-
-          const neckX = tipX - uX * headLength
-          const neckY = tipY - uY * headLength
-
-          const pX = -uY
-          const pY = uX
-
-          const slX = from.x - pX * (width / 2)
-          const slY = from.y - pY * (width / 2)
-          const nlX = neckX - pX * (width / 2)
-          const nlY = neckY - pY * (width / 2)
-          const hblX = neckX - pX * (headWidth / 2)
-          const hblY = neckY - pY * (headWidth / 2)
-          const hbrX = neckX + pX * (headWidth / 2)
-          const hbrY = neckY + pY * (headWidth / 2)
-          const nrX = neckX + pX * (width / 2)
-          const nrY = neckY + pY * (width / 2)
-          const srX = from.x + pX * (width / 2)
-          const srY = from.y + pY * (width / 2)
-
-          const d = `M ${slX} ${slY} L ${nlX} ${nlY} L ${hblX} ${hblY} L ${tipX} ${tipY} L ${hbrX} ${hbrY} L ${nrX} ${nrY} L ${srX} ${srY} Z`
-
-          return (
-            <path
-              key={`${arrow.from}-${arrow.to}-${idx}`}
-              d={d}
-              fill={arrow.color}
-              opacity={arrow.opacity ?? 0.8}
-            />
-          )
-        })}
-      </svg>
-    )
-  }
-
   const handleTakeback = () => {
     if (!canTakeback) return
     let undone = 0
@@ -1021,130 +913,34 @@ function App() {
 
   return (
     <div className="app-container" style={appThemeStyle}>
-      <nav className="sidebar">
-        <div className="sidebar-header">
-          <p className="eyebrow">Local Stockfish 17.1</p>
-          <h1>vibeChess</h1>
-          <p className="muted" style={{ fontSize: 13 }}>
-            Desktop-class chess app running locally.
-          </p>
-        </div>
-
-        <div className="sidebar-menu">
-          <div className="menu-group">
-            <button
-              className={gameStarted ? 'danger' : 'primary'}
-              onClick={gameStarted ? stopGame : startGameFromSelection}
-              disabled={!engineReady}
-            >
-              {gameStarted ? 'Stop the Game' : 'Start Game'}
-            </button>
-            <button
-              className="ghost"
-              onClick={() => (analysisMode ? leaveAnalysisMode() : enterAnalysisMode())}
-              disabled={!analysisMode && (!engineReady || !analysisAvailable || engineThinking)}
-            >
-              {analysisMode ? 'Exit Analysis' : 'Analyze Game'}
-            </button>
-            <button
-              className="ghost"
-              onClick={handleTakeback}
-              disabled={!canTakeback}
-              title={
-                canTakeback
-                  ? `Takebacks remaining: ${remainingTakebacks === Infinity ? 'Unlimited' : remainingTakebacks}`
-                  : 'No takebacks available'
-              }
-            >
-              Take Back{remainingTakebacks === Infinity ? '' : ` (${remainingTakebacks})`}
-            </button>
-          </div>
-
-          <div className="menu-group">
-            <p className="label">Difficulty (ELO)</p>
-            <div className="slider">
-              <input
-                type="range"
-                min={600}
-                max={2800}
-                step={50}
-                value={elo}
-                onChange={(e) => setElo(Number(e.target.value))}
-                disabled={gameStarted}
-                title={gameStarted ? "Stop the game to change difficulty" : "Adjust difficulty"}
-              />
-              <div className="slider-values">
-                <span>600</span>
-                <input
-                  type="number"
-                  className="elo-input"
-                  value={elo}
-                  min={600}
-                  max={2800}
-                  step={10}
-                  onChange={(e) => {
-                    const val = e.target.value === '' ? 0 : parseInt(e.target.value)
-                    setElo(val)
-                  }}
-                  onBlur={() => {
-                    const clamped = Math.min(2800, Math.max(600, elo))
-                    setElo(clamped)
-                  }}
-                  disabled={gameStarted}
-                  title={gameStarted ? "Stop the game to change difficulty" : "Type to adjust ELO"}
-                />
-                <span>2800</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="menu-group">
-            <p className="label">Your Color</p>
-            <div className="toggle">
-              <button
-                className={colorChoice === 'white' ? 'active' : ''}
-                onClick={() => handleColorChange('white')}
-                disabled={gameStarted || DEBUG_MODE}
-              >
-                White
-              </button>
-              <button
-                className={colorChoice === 'black' ? 'active' : ''}
-                onClick={() => handleColorChange('black')}
-                disabled={gameStarted || DEBUG_MODE}
-              >
-                Black
-              </button>
-              <button
-                className={colorChoice === 'random' ? 'active' : ''}
-                onClick={() => handleColorChange('random')}
-                disabled={gameStarted || DEBUG_MODE}
-              >
-                Random
-              </button>
-            </div>
-          </div>
-        </div>
-        
-        <div style={{ marginTop: 'auto' }}>
-           <div className="status-row">
-            <span className={`status-dot ${engineReady ? 'ok' : 'wait'}`} />
-            <span className="status-text" style={{ fontSize: 12 }}>
-              {!engineReady ? engineStatus : 'Engine Ready'}
-            </span>
-            <button className="settings-button" onClick={() => setSettingsOpen(true)} title="Settings">
-              <SettingsIcon size={20} />
-            </button>
-          </div>
-        </div>
-      </nav>
+      <Sidebar
+        gameStarted={gameStarted}
+        botEngineReady={botEngineReady}
+        analysisMode={analysisMode}
+        analysisAvailable={analysisAvailable}
+        engineThinking={engineThinking}
+        canTakeback={canTakeback}
+        remainingTakebacks={remainingTakebacks}
+        elo={elo}
+        colorChoice={colorChoice}
+        statusText={statusText}
+        isDebugMode={DEBUG_MODE}
+        onStartGame={startGameFromSelection}
+        onStopGame={stopGame}
+        onEnterAnalysis={enterAnalysisMode}
+        onExitAnalysis={leaveAnalysisMode}
+        onTakeback={handleTakeback}
+        onEloChange={handleEloChange}
+        onColorChange={handleColorChange}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
       <main className="board-area" ref={boardAreaRef}>
         <div className="board-shell" style={{ height: boardSize, width: boardSize }} ref={boardShellRef}>
           <div className="board-stage" style={{ width: '100%', height: '100%' }}>
             <Chessboard
               options={{
-                id: 'vs-stockfish',
+                id: 'vs-maia',
                 position: fenToShow,
                 boardOrientation: playerColor,
                 allowDragging: analysisMode || (gameStarted && !engineThinking && !gameOver),
@@ -1168,92 +964,31 @@ function App() {
             />
             {analysisMode && (
               <div className="analysis-arrows" aria-hidden="true">
-                <AnalysisArrowLayer arrows={analysisArrows} />
+                <AnalysisArrowLayer
+                  arrows={analysisArrows}
+                  boardSize={boardSize}
+                  playerColor={playerColor}
+                />
               </div>
             )}
           </div>
         </div>
       </main>
 
-      <aside className="info-panel">
-        <div className="panel-header">
-          <h3 style={{ margin: 0 }}>{turnText}</h3>
-        </div>
-
-        <div className="history-container">
-          {formattedHistory.length ? (
-            formattedHistory.map(({ moveNumber, white, black }) => {
-              const baseIndex = (moveNumber - 1) * 2
-              const isCurrentLine =
-                currentHistoryIndex === baseIndex || currentHistoryIndex === baseIndex + 1
-              return (
-                <div
-                  className={`move-row ${isCurrentLine ? 'active' : ''}`}
-                  key={moveNumber}
-                  ref={isCurrentLine ? (el) => el?.scrollIntoView({ block: 'nearest' }) : null}
-                >
-                  <span className="move-number">{moveNumber}.</span>
-                  <span
-                    className={`move-white ${currentHistoryIndex === baseIndex ? 'active' : ''}`}
-                    onClick={() => analysisMode && goToAnalysisIndex(baseIndex + 1)}
-                  >
-                    {white ?? '-'}
-                  </span>
-                  <span
-                    className={`move-black ${currentHistoryIndex === baseIndex + 1 ? 'active' : ''}`}
-                    onClick={() => analysisMode && black && goToAnalysisIndex(baseIndex + 2)}
-                  >
-                    {black ?? ''}
-                  </span>
-                </div>
-              )
-            })
-          ) : (
-            <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
-              Moves will appear here
-            </div>
-          )}
-        </div>
-
-        {analysisMode && (
-          <div className="analysis-panel">
-            {analysisError && <div style={{ color: 'red', fontSize: 12, marginBottom: 8 }}>{analysisError}</div>}
-            {analysisLoading && <div style={{ fontSize: 12, marginBottom: 8 }}>Loading analysis...</div>}
-            <div className="analysis-controls">
-              <button
-                className="ghost small"
-                onClick={() => goToAnalysisIndex(analysisIndex - 1)}
-                disabled={analysisIndex === 0}
-              >
-                &larr;
-              </button>
-              <span className="muted" style={{ fontSize: 12 }}>
-                {analysisIndex + 1} / {Math.max(analysisEntries.length, 1)}
-                {analysisTurnLabel ? ` - ${analysisTurnLabel}` : ''}
-              </span>
-              <button
-                className="ghost small"
-                onClick={() => goToAnalysisIndex(analysisIndex + 1)}
-                disabled={analysisIndex >= analysisEntries.length - 1}
-              >
-                &rarr;
-              </button>
-            </div>
-
-            {isExploringVariant && (
-              <div style={{ marginBottom: 8 }}>
-                <button
-                  className="ghost small"
-                  style={{ width: '100%', color: '#ffad71', borderColor: '#ffad71' }}
-                  onClick={resetAnalysisPosition}
-                >
-                  Return to Main Line
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </aside>
+      <InfoPanel
+        turnText={turnText}
+        formattedHistory={formattedHistory}
+        currentHistoryIndex={currentHistoryIndex}
+        analysisMode={analysisMode}
+        analysisIndex={analysisIndex}
+        analysisEntriesLength={analysisEntries.length}
+        analysisTurnLabel={analysisTurnLabel}
+        analysisError={analysisError}
+        analysisLoading={analysisLoading}
+        isExploringVariant={isExploringVariant}
+        onGoToAnalysisIndex={goToAnalysisIndex}
+        onResetAnalysisPosition={resetAnalysisPosition}
+      />
 
       {showGameOverDialog && gameOver && (
         <div className="modal-overlay">

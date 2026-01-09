@@ -99,7 +99,7 @@ export default function Settings({
                 <path d="M3 7v6h6" />
                 <path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" />
               </svg>
-              Stockfish Takebacks
+              Maia Takebacks
             </button>
           </nav>
         </aside>
@@ -114,7 +114,7 @@ export default function Settings({
               <p className="settings-description">
                 {activeSection === 'board-customization'
                   ? 'Customize the board appearance.'
-                  : 'Configure takeback options for games vs Stockfish.'}
+                  : 'Configure takeback options for games vs Maia.'}
               </p>
             </div>
             <button className="settings-close-button" onClick={onClose}>

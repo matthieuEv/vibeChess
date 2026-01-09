@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, session } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -39,6 +39,13 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = details.responseHeaders || {};
+    responseHeaders['Cross-Origin-Opener-Policy'] = ['same-origin'];
+    responseHeaders['Cross-Origin-Embedder-Policy'] = ['require-corp'];
+    callback({ responseHeaders });
+  });
+
   createWindow();
 
   app.on('activate', () => {
