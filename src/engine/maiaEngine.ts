@@ -34,7 +34,7 @@ export const MAIA_MAX_ELO = MAIA_ELOS[MAIA_ELOS.length - 1]
 export const MAIA_STEP = 100
 
 /** Default Maia ELO rating used for initialization. */
-export const MAIA_DEFAULT_ELO: MaiaElo = 1600
+export const MAIA_DEFAULT_ELO: MaiaElo = 1500
 
 const appBaseUrl =
   typeof window === 'undefined' ? new URL('http://localhost/') : new URL('.', window.location.href)
