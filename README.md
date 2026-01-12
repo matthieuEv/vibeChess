@@ -1,26 +1,51 @@
 # vibeChess
 
-> Wanted a lightweight web chess app with Stockfish analysis, without a subscripton on chess.com
+Local-first chess app: Maia for play, Stockfish for analysis.
+
+## Features
+- Maia human-like engine for play (ELO 1100-1900)
+- Stockfish analysis mode with multi-PV suggestions
+- Electron desktop build with engines downloaded on first launch
+- Debug mode to start from a custom FEN
 
 ## Prerequisites
-- Node.js 18+ recommended
-- npm (shipped with Node)
+- Node.js 18+
+- npm
 
-## Installation
+## Install
 ```bash
 npm i
 ```
 
-## Run in dev
-```bash
-npm run dev
-```
-Then open the URL shown in the terminal (default http://localhost:5173).
+## Run
+- Web dev server: `npm run dev`
+- Electron dev: `npm run electron:dev`
+- Build a desktop app: `npm run electron:build`
 
-## Key details
-- The Stockfish 17.1 lite engine is already copied to `public/engine/stockfish-17.1-lite-single-03e3232.{js,wasm}`. They are served statically; don't rename or move them without updating `ENGINE_PATH` in `src/App.tsx`.
-- ELO is adjusted via `UCI_LimitStrength`/`UCI_Elo`. The slider ranges from 600 to 2800.
-- The "Analyze" button starts interactive mode: Stockfish computes lines, the board restarts from the beginning, and you navigate with the left/right arrows. At each position the best lines are displayed, and you can play variations to explore branches.
+## Engine downloads (packaged app)
+- On first launch the app downloads Stockfish, Zerofish, and Maia weights into `~/.vibeChess`.
+- Defaults:
+  - Stockfish: `https://cdn.jsdelivr.net/npm/stockfish@17.1.0/src/`
+  - Zerofish: `https://cdn.jsdelivr.net/npm/zerofish@0.0.36/dist/`
+  - Maia weights: `https://github.com/CSSLab/maia-chess/releases/download/v1.0/`
+- Override per engine with `VIBE_STOCKFISH_DOWNLOAD_BASE_URL`, `VIBE_ZEROFISH_DOWNLOAD_BASE_URL`, or `VIBE_MAIA_DOWNLOAD_BASE_URL`.
+- Files are stored under `~/.vibeChess/engine` and `~/.vibeChess/maia`.
+
+## Dev engine setup (Vite dev server)
+If you run `npm run dev` in a browser (no Electron), download the engine assets into `public/engine` and `public/maia`:
+
+```bash
+npm run engines:download
+```
+
+Optional override for the asset host:
+
+```bash
+STOCKFISH_DOWNLOAD_BASE_URL=https://your-host/stockfish/ \\
+ZEROFISH_DOWNLOAD_BASE_URL=https://your-host/zerofish/ \\
+MAIA_DOWNLOAD_BASE_URL=https://your-host/maia/ \\
+npm run engines:download
+```
 
 ## Debug mode
 
@@ -33,10 +58,10 @@ npm run debug
 ```
 
 Behavior:
- - When opened with `VITE_DEBUG=1`, the app will show a prompt allowing you to enter a FEN string.
- - Leaving the prompt empty will reuse the previously saved FEN from localStorage.
- - Canceling the prompt keeps the fallback position (the standard starting position).
- - A valid FEN is saved under the `vibeChess.debug-fen` key in `localStorage`.
+- When opened with `VITE_DEBUG=1`, the app will show a prompt allowing you to enter a FEN string.
+- Leaving the prompt empty will reuse the previously saved FEN from localStorage.
+- Canceling the prompt keeps the fallback position (the standard starting position).
+- A valid FEN is saved under the `vibeChess.debug-fen` key in `localStorage`.
 
 Example test FEN:
 
@@ -44,13 +69,12 @@ Example test FEN:
 rnbqk3/ppppp2P/8/8/8/8/PPPPPPP1/RNBQKBNR b KQkq - 0 1
 ```
 
-To create your own test FEN, you can use a chess site like [Chess FEN Viewer](https://www.redhotpawn.com/chess/chess-fen-viewer.php)
-
 To clear the saved position from the browser console:
 
 ```js
 localStorage.removeItem('vibeChess.debug-fen')
 ```
+
 ## Troubleshooting
 
 ### macOS: "App is damaged and can't be opened"

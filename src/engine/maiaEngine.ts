@@ -38,10 +38,35 @@ export const MAIA_DEFAULT_ELO: MaiaElo = 1600
 
 const appBaseUrl =
   typeof window === 'undefined' ? new URL('http://localhost/') : new URL('.', window.location.href)
-const ENGINE_BASE = new URL('engine/', appBaseUrl).toString()
-const WEIGHTS_BASE = new URL('maia/', appBaseUrl).toString()
-const ZEROFISH_JS = new URL('zerofishEngine.js', ENGINE_BASE).toString()
-const ZEROFISH_WASM = new URL('zerofishEngine.wasm', ENGINE_BASE).toString()
+const DEFAULT_ENGINE_BASE = new URL('engine/', appBaseUrl).toString()
+const DEFAULT_WEIGHTS_BASE = new URL('maia/', appBaseUrl).toString()
+let zerofishJsUrl = new URL('zerofishEngine.js', DEFAULT_ENGINE_BASE).toString()
+let zerofishWasmUrl = new URL('zerofishEngine.wasm', DEFAULT_ENGINE_BASE).toString()
+let weightsBaseUrl = DEFAULT_WEIGHTS_BASE
+
+type MaiaAssetPaths = {
+  zerofishJsUrl?: string
+  zerofishWasmUrl?: string
+  weightsBaseUrl?: string
+}
+
+export const setMaiaAssetPaths = (next: MaiaAssetPaths) => {
+  if (next.zerofishJsUrl) {
+    zerofishJsUrl = next.zerofishJsUrl
+  }
+  if (next.zerofishWasmUrl) {
+    zerofishWasmUrl = next.zerofishWasmUrl
+  }
+  if (next.weightsBaseUrl) {
+    const normalized = next.weightsBaseUrl.endsWith('/')
+      ? next.weightsBaseUrl
+      : `${next.weightsBaseUrl}/`
+    if (weightsBaseUrl !== normalized) {
+      weightsBaseUrl = normalized
+      weightsCache.clear()
+    }
+  }
+}
 
 /** Number of nodes to search when computing a move. */
 const MAIA_NODE_BUDGET = 400 // Reduced from 800 to avoid OOM on first moves
@@ -87,6 +112,17 @@ export const snapMaiaElo = (value: number): MaiaElo => {
  * @returns The decompressed model weights as a Uint8Array
  * @throws {Error} If the weights cannot be fetched
  */
+const readLocalFile = async (fileUrl: string) => {
+  const req = typeof window !== 'undefined' ? (window as typeof window & { require?: any }).require : null
+  if (!req) {
+    throw new Error('Local file access is unavailable in this environment.')
+  }
+  const { fileURLToPath } = req('url') as typeof import('url')
+  const fs = req('fs') as typeof import('fs')
+  const filePath = fileURLToPath(fileUrl)
+  return fs.promises.readFile(filePath)
+}
+
 const loadMaiaWeights = async (elo: MaiaElo) => {
   const cached = weightsCache.get(elo)
   if (cached) {
@@ -94,17 +130,26 @@ const loadMaiaWeights = async (elo: MaiaElo) => {
     return cached
   }
 
-  const url = `${WEIGHTS_BASE}maia-${elo}.pb.gz`
+  const url = `${weightsBaseUrl}maia-${elo}.pb.gz`
   const loadStart = performance.now()
   logMaia('weights load start', { elo, url })
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`Failed to load Maia weights for ${elo}: ${response.status} ${response.statusText}`)
+  let bytes: Uint8Array
+  let contentEncoding = 'none'
+  let contentLength: string | number = 'unknown'
+  if (url.startsWith('file://')) {
+    const buffer = await readLocalFile(url)
+    bytes = new Uint8Array(buffer)
+    contentLength = bytes.length
+  } else {
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to load Maia weights for ${elo}: ${response.status} ${response.statusText}`)
+    }
+    contentEncoding = response.headers.get('content-encoding') ?? 'none'
+    contentLength = response.headers.get('content-length') ?? 'unknown'
+    const buffer = await response.arrayBuffer()
+    bytes = new Uint8Array(buffer)
   }
-  const contentEncoding = response.headers.get('content-encoding') ?? 'none'
-  const contentLength = response.headers.get('content-length') ?? 'unknown'
-  const buffer = await response.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
   const isGzip = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b
   
   logMaia('weights decompress start', { elo, compressedSize: bytes.length, isGzip })
@@ -309,11 +354,11 @@ export const createMaiaEngine = async (): Promise<MaiaEngine> => {
     window.addEventListener('unhandledrejection', onUnhandledRejection)
   }
 
-  logMaia('zerofish init start', { js: ZEROFISH_JS, wasm: ZEROFISH_WASM })
+  logMaia('zerofish init start', { js: zerofishJsUrl, wasm: zerofishWasmUrl })
   let zerofish
   try {
     zerofish = await makeZerofish({
-      locator: (file) => (file.endsWith('.wasm') ? ZEROFISH_WASM : ZEROFISH_JS),
+      locator: (file) => (file.endsWith('.wasm') ? zerofishWasmUrl : zerofishJsUrl),
     })
   } catch (err) {
     logMaia('zerofish init error', err)

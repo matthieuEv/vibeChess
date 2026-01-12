@@ -491,6 +491,44 @@ h1 {
   min-width: 100px;
 }
 
+.engine-download-modal {
+  max-width: 420px;
+}
+
+.engine-download-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.engine-download-bar {
+  height: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.engine-download-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #5cc8ff, #6fe3a1);
+  transition: width 0.2s ease;
+}
+
+.engine-download-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.engine-download-meta.subtle {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
 .promotion-button {
   min-width: 76px;
   height: 76px;

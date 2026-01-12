@@ -10,11 +10,12 @@
     "dev": "vite",
     "debug": "VITE_DEBUG=1 vite",
     "build": "tsc -b && vite build",
+    "engines:download": "node scripts/download-engines.js",
     "test": "vitest run",
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && NODE_ENV=development electron .\"",
-    "electron:build": "npm run build && electron-builder --publish never"
+    "electron:build": "npm run build && node scripts/strip-engines.js && electron-builder --publish never"
   },
   "build": {
     "appId": "com.vibechess.app",

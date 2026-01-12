@@ -17,9 +17,15 @@ import {
   getMaiaEngine,
   MAIA_DEFAULT_ELO,
   snapMaiaElo,
+  setMaiaAssetPaths,
   type MaiaElo,
   type MaiaEngine,
 } from './engine/maiaEngine'
+import {
+  ensureEngineAssets,
+  type EngineAssets,
+  type EngineDownloadEvent,
+} from './engine/engineAssets'
 import Settings, { BOARD_THEMES, type BoardThemeKey } from './Settings'
 
 type Suggestion = {
@@ -35,7 +41,33 @@ type PendingPromotion = {
   to: Square
 }
 
-const STOCKFISH_ENGINE_PATH = './engine/stockfish-17.1-lite-single-03e3232.js'
+type EngineDownloadState = {
+  status: 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
+  visible: boolean
+  totalFiles?: number
+  currentFileLabel?: string
+  currentFileIndex?: number
+  currentFileTotal?: number | null
+  currentFileReceived?: number
+  overallTotal?: number | null
+  overallReceived?: number
+  error?: string | null
+}
+
+const formatBytes = (bytes?: number | null) => {
+  if (bytes === null || bytes === undefined) return 'Unknown size'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB']
+  let value = bytes / 1024
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2
+  return `${value.toFixed(precision)} ${units[unitIndex]}`
+}
+
 const ANALYSIS_THINK_TIME_MS = 1200
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_DEBUG === '1'
 const DEBUG_FEN_STORAGE_KEY = 'vibeChess.debug-fen'
@@ -87,9 +119,16 @@ function App() {
   const [colorChoice, setColorChoice] = useState<ColorChoice>('white')
   const [gameStarted, setGameStarted] = useState(false)
   const [botEngineReady, setBotEngineReady] = useState(false)
-  const [botEngineStatus, setBotEngineStatus] = useState('Starting Maia...')
+  const [botEngineStatus, setBotEngineStatus] = useState('Preparing engines...')
   const [analysisEngineReady, setAnalysisEngineReady] = useState(false)
-  const [analysisEngineStatus, setAnalysisEngineStatus] = useState('Stockfish idle')
+  const [analysisEngineStatus, setAnalysisEngineStatus] =
+    useState('Stockfish waiting for engines...')
+  const [engineAssets, setEngineAssets] = useState<EngineAssets | null>(null)
+  const [engineDownloadState, setEngineDownloadState] = useState<EngineDownloadState>({
+    status: 'idle',
+    visible: false,
+    error: null,
+  })
   const [elo, setElo] = useState<MaiaElo>(MAIA_DEFAULT_ELO)
   const [history, setHistory] = useState<string[]>([])
   const [historyVerbose, setHistoryVerbose] = useState<Move[]>([])
@@ -118,6 +157,7 @@ function App() {
   const analysisBestResolver = useRef<((line: string) => void) | null>(null)
   const analysisInfoHandler = useRef<((line: string) => void) | null>(null)
   const analysisInitPromiseRef = useRef<Promise<void> | null>(null)
+  const engineBootstrapIdRef = useRef(0)
   const maiaEngineRef = useRef<MaiaEngine | null>(null)
   const boardShellRef = useRef<HTMLDivElement>(null)
   const analysisCacheRef = useRef<Map<string, Suggestion[]>>(new Map())
@@ -131,7 +171,7 @@ function App() {
     if (import.meta.env.DEV) {
       console.info('[Stockfish]', ...args)
     }
-  }, [])
+  }, [ensureEngineAssets])
 
   const sendEngine = useCallback((cmd: string) => {
     const worker = analysisWorkerRef.current
@@ -152,7 +192,7 @@ function App() {
     analysisGameRef.current = new Chess(fen)
     setAnalysisBoardFen(fen)
     setSelectedSquare(null)
-  }, [])
+  }, [ensureEngineAssets])
 
   const waitForAnalysisReady = useCallback(() =>
     new Promise<void>((resolve) => {
@@ -174,6 +214,10 @@ function App() {
     if (analysisInitPromiseRef.current) {
       return analysisInitPromiseRef.current
     }
+    if (!engineAssets) {
+      setAnalysisEngineStatus('Stockfish waiting for engines...')
+      return Promise.reject(new Error('Engine assets not ready'))
+    }
 
     setAnalysisEngineStatus('Starting Stockfish...')
     analysisInitPromiseRef.current = new Promise<void>((resolve, reject) => {
@@ -189,7 +233,7 @@ function App() {
       }
 
       try {
-        const worker = new Worker(STOCKFISH_ENGINE_PATH)
+        const worker = new Worker(engineAssets.stockfishJsUrl)
         analysisWorkerRef.current = worker
 
         worker.onerror = (event) => {
@@ -245,7 +289,7 @@ function App() {
     })
 
     return analysisInitPromiseRef.current
-  }, [analysisEngineReady, logEngine, sendEngine])
+  }, [analysisEngineReady, engineAssets, logEngine, sendEngine])
 
   const requestMultiSuggestions = useCallback(async (fen: string, multiPv = 3, requestId?: number) => {
     const suggestions: Suggestion[] = []
@@ -604,6 +648,100 @@ function App() {
 
   const boardAreaRef = useRef<HTMLElement>(null)
 
+  const startEngineBootstrap = useCallback(() => {
+    const requestId = ++engineBootstrapIdRef.current
+    setEngineAssets(null)
+    setEngineDownloadState({ status: 'checking', visible: false, error: null })
+    setBotEngineReady(false)
+    setBotEngineStatus('Preparing engines...')
+    setAnalysisEngineReady(false)
+    setAnalysisEngineStatus('Stockfish waiting for engines...')
+    analysisInitPromiseRef.current = null
+    if (analysisWorkerRef.current) {
+      analysisWorkerRef.current.terminate()
+      analysisWorkerRef.current = null
+    }
+
+    const handleEvent = (event: EngineDownloadEvent) => {
+      if (engineBootstrapIdRef.current !== requestId) return
+      if (event.type === 'start') {
+        setEngineDownloadState({
+          status: 'downloading',
+          visible: true,
+          totalFiles: event.totalFiles,
+          overallTotal: event.totalBytes,
+          overallReceived: 0,
+          error: null,
+        })
+        setBotEngineStatus('Downloading engines...')
+        setAnalysisEngineStatus('Stockfish downloading...')
+        return
+      }
+      if (event.type === 'progress') {
+        setEngineDownloadState((prev) => ({
+          ...prev,
+          status: 'downloading',
+          visible: true,
+          totalFiles: event.file.totalFiles,
+          currentFileLabel: event.file.label,
+          currentFileIndex: event.file.index,
+          currentFileTotal: event.file.totalBytes,
+          currentFileReceived: event.file.receivedBytes,
+          overallTotal: event.overall.totalBytes,
+          overallReceived: event.overall.receivedBytes,
+          error: null,
+        }))
+        return
+      }
+      if (event.type === 'error') {
+        setEngineDownloadState({
+          status: 'error',
+          visible: true,
+          error: event.message,
+        })
+        setBotEngineStatus('Engine download failed')
+        setAnalysisEngineStatus('Stockfish download failed')
+        return
+      }
+      if (event.type === 'done') {
+        setEngineDownloadState((prev) => ({
+          ...prev,
+          status: 'ready',
+          visible: false,
+          error: null,
+        }))
+      }
+    }
+
+    ensureEngineAssets(handleEvent)
+      .then((result) => {
+        if (engineBootstrapIdRef.current !== requestId) return
+        setEngineAssets(result.assets)
+        setEngineDownloadState((prev) => ({
+          ...prev,
+          status: 'ready',
+          visible: false,
+          error: null,
+        }))
+        setAnalysisEngineStatus('Stockfish idle')
+      })
+      .catch((err) => {
+        if (engineBootstrapIdRef.current !== requestId) return
+        const message = err instanceof Error ? err.message : String(err)
+        setEngineDownloadState({
+          status: 'error',
+          visible: true,
+          error: message,
+        })
+        setBotEngineStatus('Engine download failed')
+        setAnalysisEngineStatus('Stockfish download failed')
+      })
+  }, [ensureEngineAssets])
+
+  useEffect(() => {
+    startEngineBootstrap()
+  }, [startEngineBootstrap])
+
   useEffect(() => {
     const updateSize = () => {
       if (!boardAreaRef.current) return
@@ -629,7 +767,16 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!engineAssets) return
     let cancelled = false
+    setBotEngineReady(false)
+    setBotEngineStatus('Starting Maia...')
+    setMaiaAssetPaths({
+      zerofishJsUrl: engineAssets.zerofishJsUrl,
+      zerofishWasmUrl: engineAssets.zerofishWasmUrl,
+      weightsBaseUrl: engineAssets.maiaBaseUrl,
+    })
+
     getMaiaEngine()
       .then((engine) => {
         if (cancelled) {
@@ -653,7 +800,7 @@ function App() {
       cancelled = true
       maiaEngineRef.current?.stop()
     }
-  }, [])
+  }, [engineAssets])
 
   useEffect(() => {
     if (!analysisMode || !analysisBoardFen) return
@@ -765,6 +912,30 @@ function App() {
     return 'Engines ready'
   }, [analysisEngineReady, analysisEngineStatus, botEngineReady, botEngineStatus])
 
+  const overallPercent =
+    engineDownloadState.overallTotal && engineDownloadState.overallReceived !== undefined
+      ? Math.min(
+          100,
+          Math.round((engineDownloadState.overallReceived / engineDownloadState.overallTotal) * 100),
+        )
+      : null
+  const fileProgressText =
+    engineDownloadState.currentFileReceived !== undefined
+      ? engineDownloadState.currentFileTotal
+        ? `${formatBytes(engineDownloadState.currentFileReceived)} / ${formatBytes(
+            engineDownloadState.currentFileTotal,
+          )}`
+        : `${formatBytes(engineDownloadState.currentFileReceived)} downloaded`
+      : 'Preparing download...'
+  const overallProgressText =
+    engineDownloadState.overallReceived !== undefined
+      ? engineDownloadState.overallTotal
+        ? `${formatBytes(engineDownloadState.overallReceived)} / ${formatBytes(
+            engineDownloadState.overallTotal,
+          )}`
+        : `${formatBytes(engineDownloadState.overallReceived)} downloaded`
+      : ''
+
   const startGameFromSelection = useCallback(() => {
     const resolvedColor =
       colorChoice === 'random' ? (Math.random() < 0.5 ? 'white' : 'black') : colorChoice
@@ -852,7 +1023,8 @@ function App() {
     return arrows
   }, [analysisBoardFen, analysisEntries, analysisIndex, analysisMode, analysisSuggestions])
 
-  const analysisAvailable = history.length > 0
+  const engineAssetsReady = Boolean(engineAssets)
+  const analysisAvailable = history.length > 0 && engineAssetsReady
   const currentAnalysisEntry = analysisEntries[analysisIndex]
   const isExploringVariant =
     analysisMode && currentAnalysisEntry && analysisBoardFen !== currentAnalysisEntry.fen
@@ -1030,6 +1202,59 @@ function App() {
                 </button>
               )})}
             </div>
+          </div>
+        </div>
+      )}
+
+      {engineDownloadState.visible && (
+        <div className="modal-overlay">
+          <div className="modal-content engine-download-modal">
+            <h2>Downloading engines</h2>
+            {engineDownloadState.status === 'error' ? (
+              <>
+                <p>{engineDownloadState.error ?? 'Engine download failed.'}</p>
+                <div className="modal-actions">
+                  <button className="primary" onClick={startEngineBootstrap}>
+                    Retry download
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p>Stockfish, Zerofish, and Maia are downloaded on first launch.</p>
+                <div className="engine-download-progress">
+                  <div className="engine-download-bar">
+                    <div
+                      className="engine-download-fill"
+                      style={{ width: `${overallPercent ?? 0}%` }}
+                    />
+                  </div>
+                  <div className="engine-download-meta">
+                    <span>
+                      {engineDownloadState.currentFileLabel
+                        ? `Downloading ${engineDownloadState.currentFileLabel}`
+                        : 'Preparing download'}
+                    </span>
+                    {overallPercent !== null && <span>{overallPercent}%</span>}
+                  </div>
+                  <div className="engine-download-meta subtle">
+                    <span>{fileProgressText}</span>
+                    <span>
+                      {engineDownloadState.currentFileIndex ?? 0}
+                      {engineDownloadState.totalFiles
+                        ? `/${engineDownloadState.totalFiles}`
+                        : ''}
+                    </span>
+                  </div>
+                  {overallProgressText && (
+                    <div className="engine-download-meta subtle">
+                      <span>{overallProgressText}</span>
+                      <span>Overall</span>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

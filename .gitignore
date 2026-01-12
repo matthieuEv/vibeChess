@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Engine assets (downloaded locally)
+public/engine/
+public/maia/
+
 # Electron
 release/
 
