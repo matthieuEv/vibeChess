@@ -52,10 +52,14 @@ type MaiaAssetPaths = {
 
 export const setMaiaAssetPaths = (next: MaiaAssetPaths) => {
   if (next.zerofishJsUrl) {
-    zerofishJsUrl = next.zerofishJsUrl
+    zerofishJsUrl = next.zerofishJsUrl.startsWith('http') || next.zerofishJsUrl.startsWith('/')
+      ? next.zerofishJsUrl
+      : new URL(next.zerofishJsUrl, window.location.href).toString()
   }
   if (next.zerofishWasmUrl) {
-    zerofishWasmUrl = next.zerofishWasmUrl
+    zerofishWasmUrl = next.zerofishWasmUrl.startsWith('http') || next.zerofishWasmUrl.startsWith('/')
+      ? next.zerofishWasmUrl
+      : new URL(next.zerofishWasmUrl, window.location.href).toString()
   }
   if (next.weightsBaseUrl) {
     const normalized = next.weightsBaseUrl.endsWith('/')

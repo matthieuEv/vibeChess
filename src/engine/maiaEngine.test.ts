@@ -22,7 +22,7 @@ describe('Maia ELO Constants', () => {
 
   it('should have a valid default ELO', () => {
     expect(MAIA_ELOS).toContain(MAIA_DEFAULT_ELO)
-    expect(MAIA_DEFAULT_ELO).toBe(1600)
+    expect(MAIA_DEFAULT_ELO).toBe(1500)
   })
 
   it('should have sequential ELO values with correct step', () => {

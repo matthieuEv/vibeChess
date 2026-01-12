@@ -48,11 +48,7 @@ export default function Sidebar({
   return (
     <nav className="sidebar">
       <div className="sidebar-header">
-        <p className="eyebrow">Maia for play, Stockfish for analysis</p>
         <h1>vibeChess</h1>
-        <p className="muted" style={{ fontSize: 13 }}>
-          Desktop-class chess app running locally.
-        </p>
       </div>
 
       <div className="sidebar-menu">

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '..')
 const publicDir = path.join(projectRoot, 'public')
+const nodeModulesDir = path.join(projectRoot, 'node_modules')
 
 const normalizeBaseUrl = (value) => (value.endsWith('/') ? value : `${value}/`)
 const LEGACY_ENGINE_DOWNLOAD_BASE_URL =
@@ -17,11 +18,6 @@ const STOCKFISH_DOWNLOAD_BASE_URL = normalizeBaseUrl(
   process.env.VIBE_STOCKFISH_DOWNLOAD_BASE_URL ||
     process.env.STOCKFISH_DOWNLOAD_BASE_URL ||
     'https://unpkg.com/stockfish@17.1.0/src/',
-)
-const ZEROFISH_DOWNLOAD_BASE_URL = normalizeBaseUrl(
-  process.env.VIBE_ZEROFISH_DOWNLOAD_BASE_URL ||
-    process.env.ZEROFISH_DOWNLOAD_BASE_URL ||
-    'https://unpkg.com/zerofish@0.0.36/dist/',
 )
 const MAIA_DOWNLOAD_BASE_URL = normalizeBaseUrl(
   process.env.VIBE_MAIA_DOWNLOAD_BASE_URL ||
@@ -44,18 +40,6 @@ const ENGINE_ASSETS = LEGACY_ENGINE_DOWNLOAD_BASE_URL
         remotePath: 'engine/stockfish-17.1-lite-single-03e3232.wasm',
         dir: 'engine',
       },
-      {
-        label: 'Zerofish (JS)',
-        baseUrl: normalizeBaseUrl(LEGACY_ENGINE_DOWNLOAD_BASE_URL),
-        remotePath: 'engine/zerofishEngine.js',
-        dir: 'engine',
-      },
-      {
-        label: 'Zerofish (WASM)',
-        baseUrl: normalizeBaseUrl(LEGACY_ENGINE_DOWNLOAD_BASE_URL),
-        remotePath: 'engine/zerofishEngine.wasm',
-        dir: 'engine',
-      },
       ...MAIA_ELOS.map((elo) => ({
         label: `Maia ${elo}`,
         baseUrl: normalizeBaseUrl(LEGACY_ENGINE_DOWNLOAD_BASE_URL),
@@ -74,18 +58,6 @@ const ENGINE_ASSETS = LEGACY_ENGINE_DOWNLOAD_BASE_URL
         label: 'Stockfish (WASM)',
         baseUrl: STOCKFISH_DOWNLOAD_BASE_URL,
         remotePath: 'stockfish-17.1-lite-single-03e3232.wasm',
-        dir: 'engine',
-      },
-      {
-        label: 'Zerofish (JS)',
-        baseUrl: ZEROFISH_DOWNLOAD_BASE_URL,
-        remotePath: 'zerofishEngine.js',
-        dir: 'engine',
-      },
-      {
-        label: 'Zerofish (WASM)',
-        baseUrl: ZEROFISH_DOWNLOAD_BASE_URL,
-        remotePath: 'zerofishEngine.wasm',
         dir: 'engine',
       },
       ...MAIA_ELOS.map((elo) => ({
@@ -136,14 +108,36 @@ const downloadFile = async (url, destPath) => {
   }
 }
 
+const copyFile = async (srcPath, destPath) => {
+  await fs.promises.mkdir(path.dirname(destPath), { recursive: true })
+  await fs.promises.copyFile(srcPath, destPath)
+}
+
 const run = async () => {
   if (LEGACY_ENGINE_DOWNLOAD_BASE_URL) {
     console.info(`Engine base URL: ${normalizeBaseUrl(LEGACY_ENGINE_DOWNLOAD_BASE_URL)}`)
   } else {
     console.info(`Stockfish base URL: ${STOCKFISH_DOWNLOAD_BASE_URL}`)
-    console.info(`Zerofish base URL: ${ZEROFISH_DOWNLOAD_BASE_URL}`)
     console.info(`Maia base URL: ${MAIA_DOWNLOAD_BASE_URL}`)
   }
+  
+  // Copy Zerofish files from node_modules to public/engine
+  const zerofishFiles = ['zerofishEngine.js', 'zerofishEngine.wasm']
+  for (const file of zerofishFiles) {
+    const srcPath = path.join(nodeModulesDir, 'zerofish', 'dist', file)
+    const destPath = path.join(publicDir, 'engine', file)
+    if (await fileExists(destPath)) {
+      console.info(`Skip Zerofish (${file.endsWith('.wasm') ? 'WASM' : 'JS'}) (already present)`)
+      continue
+    }
+    if (await fileExists(srcPath)) {
+      console.info(`Copying Zerofish (${file.endsWith('.wasm') ? 'WASM' : 'JS'})...`)
+      await copyFile(srcPath, destPath)
+    } else {
+      console.warn(`Warning: ${srcPath} not found. Run npm install first.`)
+    }
+  }
+  
   for (const asset of ENGINE_ASSETS) {
     const destPath = path.join(publicDir, asset.dir, path.basename(asset.remotePath))
     if (await fileExists(destPath)) {
