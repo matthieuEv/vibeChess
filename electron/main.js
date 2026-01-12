@@ -1,9 +1,11 @@
-import { app, BrowserWindow, ipcMain, session } from 'electron';
+import { app, BrowserWindow, ipcMain, session, protocol } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { pipeline } from 'stream/promises';
 import { Readable, Transform } from 'stream';
 import { fileURLToPath, pathToFileURL } from 'url';
+import http from 'http';
+import { lookup } from 'mime-types';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === 'development';
@@ -13,12 +15,12 @@ const LEGACY_ENGINE_DOWNLOAD_BASE_URL =
 const STOCKFISH_DOWNLOAD_BASE_URL = normalizeBaseUrl(
   process.env.VIBE_STOCKFISH_DOWNLOAD_BASE_URL ||
     process.env.STOCKFISH_DOWNLOAD_BASE_URL ||
-    'https://cdn.jsdelivr.net/npm/stockfish@17.1.0/src/',
+    'https://unpkg.com/stockfish@17.1.0/src/',
 );
 const ZEROFISH_DOWNLOAD_BASE_URL = normalizeBaseUrl(
   process.env.VIBE_ZEROFISH_DOWNLOAD_BASE_URL ||
     process.env.ZEROFISH_DOWNLOAD_BASE_URL ||
-    'https://cdn.jsdelivr.net/npm/zerofish@0.0.36/dist/',
+    'https://unpkg.com/zerofish@0.0.36/dist/',
 );
 const MAIA_DOWNLOAD_BASE_URL = normalizeBaseUrl(
   process.env.VIBE_MAIA_DOWNLOAD_BASE_URL ||
@@ -121,7 +123,19 @@ const ENGINE_ASSETS = LEGACY_ENGINE_DOWNLOAD_BASE_URL
 
 const getVibeChessDir = () => path.join(app.getPath('home'), VIBECHESS_DIR_NAME);
 
-const buildEnginePaths = (baseDir) => {
+const buildEnginePaths = (baseDir, serverPort) => {
+  if (serverPort) {
+    // Use HTTP URLs when server is running (production)
+    const baseUrl = `http://127.0.0.1:${serverPort}/local-engines`;
+    return {
+      stockfishJsUrl: `${baseUrl}/engine/${STOCKFISH_JS}`,
+      stockfishWasmUrl: `${baseUrl}/engine/${STOCKFISH_WASM}`,
+      zerofishJsUrl: `${baseUrl}/engine/${ZEROFISH_JS}`,
+      zerofishWasmUrl: `${baseUrl}/engine/${ZEROFISH_WASM}`,
+      maiaBaseUrl: `${baseUrl}/maia/`,
+    };
+  }
+  // Use file:// URLs in development
   const engineDir = path.join(baseDir, ENGINE_DIR_NAME);
   const maiaDir = path.join(baseDir, MAIA_DIR_NAME);
   return {
@@ -194,7 +208,7 @@ const sendDownloadEvent = (webContentsSet, payload) => {
 
 let activeDownload = null;
 
-const ensureEngineAssets = async (webContentsSet) => {
+const ensureEngineAssets = async (webContentsSet, serverPort) => {
   const baseDir = getVibeChessDir();
   await fs.promises.mkdir(baseDir, { recursive: true });
   const assetsWithPaths = ENGINE_ASSETS.map((asset) => ({
@@ -210,7 +224,7 @@ const ensureEngineAssets = async (webContentsSet) => {
   }
 
   if (missingAssets.length === 0) {
-    return { assets: buildEnginePaths(baseDir), downloaded: false };
+    return { assets: buildEnginePaths(baseDir, serverPort), downloaded: false };
   }
 
   sendDownloadEvent(webContentsSet, {
@@ -269,7 +283,7 @@ const ensureEngineAssets = async (webContentsSet) => {
   }
 
   sendDownloadEvent(webContentsSet, { type: 'done' });
-  return { assets: buildEnginePaths(baseDir), downloaded: true };
+  return { assets: buildEnginePaths(baseDir, serverPort), downloaded: true };
 };
 
 ipcMain.handle('engine:ensure-assets', async (event) => {
@@ -279,7 +293,8 @@ ipcMain.handle('engine:ensure-assets', async (event) => {
   }
 
   const webContentsSet = new Set([event.sender]);
-  const promise = ensureEngineAssets(webContentsSet).catch((err) => {
+  const serverPort = localServer ? localServer.port : null;
+  const promise = ensureEngineAssets(webContentsSet, serverPort).catch((err) => {
     sendDownloadEvent(webContentsSet, {
       type: 'error',
       message: err instanceof Error ? err.message : String(err),
@@ -295,6 +310,74 @@ ipcMain.handle('engine:ensure-assets', async (event) => {
   }
 });
 
+let localServer = null;
+
+const startLocalServer = () => {
+  return new Promise((resolve, reject) => {
+    const distPath = path.join(__dirname, '../dist');
+    const vibeChessDir = getVibeChessDir();
+    
+    const server = http.createServer((req, res) => {
+      // Parse URL and remove query string
+      const url = new URL(req.url, 'http://localhost');
+      let filePath;
+      let basePath;
+      
+      // Serve engine files from ~/.vibeChess/
+      if (url.pathname.startsWith('/local-engines/')) {
+        const relativePath = url.pathname.slice('/local-engines/'.length);
+        filePath = path.join(vibeChessDir, relativePath);
+        basePath = vibeChessDir;
+      } else {
+        // Serve app files from dist/
+        filePath = path.join(distPath, url.pathname);
+        basePath = distPath;
+        
+        // Default to index.html
+        if (filePath.endsWith('/') || !path.extname(filePath)) {
+          filePath = path.join(filePath, 'index.html');
+        }
+      }
+      
+      // Security: prevent directory traversal
+      const normalizedPath = path.normalize(filePath);
+      if (!normalizedPath.startsWith(basePath)) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+      }
+      
+      fs.readFile(normalizedPath, (err, data) => {
+        if (err) {
+          res.writeHead(404);
+          res.end('Not found');
+          return;
+        }
+        
+        const mimeType = lookup(normalizedPath) || 'application/octet-stream';
+        
+        // Set headers for SharedArrayBuffer support
+        res.writeHead(200, {
+          'Content-Type': mimeType,
+          'Cross-Origin-Opener-Policy': 'same-origin',
+          'Cross-Origin-Embedder-Policy': 'require-corp',
+          'Cross-Origin-Resource-Policy': 'cross-origin',
+          'Cache-Control': 'no-cache',
+        });
+        res.end(data);
+      });
+    });
+    
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      localServer = { server, port };
+      resolve(port);
+    });
+    
+    server.on('error', reject);
+  });
+};
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
@@ -302,8 +385,7 @@ function createWindow() {
     icon: path.join(__dirname, isDev ? '../public/icon.png' : '../dist/icon.png'),
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false, // Easier access to workers if needed; otherwise set true with preload
-      webSecurity: false // Sometimes needed to load local resources in dev
+      contextIsolation: false,
     },
   });
 
@@ -311,12 +393,10 @@ function createWindow() {
     win.loadURL('http://localhost:5173');
     win.webContents.openDevTools();
   } else {
-    // In production, load the index.html from the Vite build
-    // main.js is in electron/ and the build lives in dist/, so step up one level
-    win.loadFile(path.join(__dirname, '../dist/index.html'));
-    
-    // Enable DevTools in production for debugging
-    // win.webContents.openDevTools(); 
+    // Use local HTTP server for proper COOP/COEP headers
+    if (localServer) {
+      win.loadURL(`http://127.0.0.1:${localServer.port}/`);
+    }
   }
 
   // Keyboard shortcut to open DevTools (Cmd+Option+I on Mac, Ctrl+Shift+I on Windows/Linux)
@@ -328,13 +408,17 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    const responseHeaders = details.responseHeaders || {};
-    responseHeaders['Cross-Origin-Opener-Policy'] = ['same-origin'];
-    responseHeaders['Cross-Origin-Embedder-Policy'] = ['require-corp'];
-    callback({ responseHeaders });
-  });
+app.whenReady().then(async () => {
+  // Start local server in production mode
+  if (!isDev) {
+    try {
+      await startLocalServer();
+    } catch (err) {
+      console.error('Failed to start local server:', err);
+      app.quit();
+      return;
+    }
+  }
 
   createWindow();
 
@@ -346,6 +430,10 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  if (localServer) {
+    localServer.server.close();
+    localServer = null;
+  }
   if (process.platform !== 'darwin') {
     app.quit();
   }

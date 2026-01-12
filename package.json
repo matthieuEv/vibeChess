@@ -8,12 +8,12 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
-    "debug": "VITE_DEBUG=1 vite",
+    "dev:debug": "VITE_DEBUG=1 vite",
+    "dev:app": "rm -fr ~/.vibeChess && npm run build && electron .",
     "build": "tsc -b && vite build",
     "engines:download": "node scripts/download-engines.js",
     "test": "vitest run",
     "lint": "eslint .",
-    "preview": "vite preview",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && NODE_ENV=development electron .\"",
     "electron:build": "npm run build && node scripts/strip-engines.js && electron-builder --publish never"
   },

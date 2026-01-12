@@ -54,20 +54,6 @@ type EngineDownloadState = {
   error?: string | null
 }
 
-const formatBytes = (bytes?: number | null) => {
-  if (bytes === null || bytes === undefined) return 'Unknown size'
-  if (bytes < 1024) return `${bytes} B`
-  const units = ['KB', 'MB', 'GB']
-  let value = bytes / 1024
-  let unitIndex = 0
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-  const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2
-  return `${value.toFixed(precision)} ${units[unitIndex]}`
-}
-
 const ANALYSIS_THINK_TIME_MS = 1200
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_DEBUG === '1'
 const DEBUG_FEN_STORAGE_KEY = 'vibeChess.debug-fen'
@@ -913,30 +899,6 @@ function App() {
     return 'Engines ready'
   }, [analysisEngineReady, analysisEngineStatus, botEngineReady, botEngineStatus])
 
-  const overallPercent =
-    engineDownloadState.overallTotal && engineDownloadState.overallReceived !== undefined
-      ? Math.min(
-          100,
-          Math.round((engineDownloadState.overallReceived / engineDownloadState.overallTotal) * 100),
-        )
-      : null
-  const fileProgressText =
-    engineDownloadState.currentFileReceived !== undefined
-      ? engineDownloadState.currentFileTotal
-        ? `${formatBytes(engineDownloadState.currentFileReceived)} / ${formatBytes(
-            engineDownloadState.currentFileTotal,
-          )}`
-        : `${formatBytes(engineDownloadState.currentFileReceived)} downloaded`
-      : 'Preparing download...'
-  const overallProgressText =
-    engineDownloadState.overallReceived !== undefined
-      ? engineDownloadState.overallTotal
-        ? `${formatBytes(engineDownloadState.overallReceived)} / ${formatBytes(
-            engineDownloadState.overallTotal,
-          )}`
-        : `${formatBytes(engineDownloadState.overallReceived)} downloaded`
-      : ''
-
   const startGameFromSelection = useCallback(() => {
     const resolvedColor =
       colorChoice === 'random' ? (Math.random() < 0.5 ? 'white' : 'black') : colorChoice
@@ -1228,32 +1190,23 @@ function App() {
                   <div className="engine-download-bar">
                     <div
                       className="engine-download-fill"
-                      style={{ width: `${overallPercent ?? 0}%` }}
+                      style={{
+                        width: engineDownloadState.totalFiles
+                          ? `${((engineDownloadState.currentFileIndex ?? 0) / engineDownloadState.totalFiles) * 100}%`
+                          : '0%',
+                      }}
                     />
                   </div>
                   <div className="engine-download-meta">
                     <span>
                       {engineDownloadState.currentFileLabel
                         ? `Downloading ${engineDownloadState.currentFileLabel}`
-                        : 'Preparing download'}
+                        : 'Preparing download...'}
                     </span>
-                    {overallPercent !== null && <span>{overallPercent}%</span>}
-                  </div>
-                  <div className="engine-download-meta subtle">
-                    <span>{fileProgressText}</span>
                     <span>
-                      {engineDownloadState.currentFileIndex ?? 0}
-                      {engineDownloadState.totalFiles
-                        ? `/${engineDownloadState.totalFiles}`
-                        : ''}
+                      {engineDownloadState.currentFileIndex ?? 0} / {engineDownloadState.totalFiles ?? '?'}
                     </span>
                   </div>
-                  {overallProgressText && (
-                    <div className="engine-download-meta subtle">
-                      <span>{overallProgressText}</span>
-                      <span>Overall</span>
-                    </div>
-                  )}
                 </div>
               </>
             )}
