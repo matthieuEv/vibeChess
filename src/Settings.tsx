@@ -11,9 +11,11 @@ type SettingsProps = {
   takebackLimit: number
   onTakebackLimitChange: (limit: number) => void
   takebacksUsed: number
+  allowEloChangeMidGame: boolean
+  onAllowEloChangeMidGameChange: (allow: boolean) => void
 }
 
-type SettingSection = 'board-customization' | 'takebacks'
+type SettingSection = 'board-customization' | 'chess-engine'
 
 const BOARD_THEMES: Record<BoardThemeKey, { label: string; light: string; dark: string }> = {
   green: {
@@ -46,6 +48,8 @@ export default function Settings({
   takebackLimit,
   onTakebackLimitChange,
   takebacksUsed,
+  allowEloChangeMidGame,
+  onAllowEloChangeMidGameChange,
 }: SettingsProps) {
   const [activeSection, setActiveSection] = useState<SettingSection>('board-customization')
 
@@ -83,8 +87,8 @@ export default function Settings({
               Board Customization
             </button>
             <button
-              className={`settings-nav-item ${activeSection === 'takebacks' ? 'active' : ''}`}
-              onClick={() => setActiveSection('takebacks')}
+              className={`settings-nav-item ${activeSection === 'chess-engine' ? 'active' : ''}`}
+              onClick={() => setActiveSection('chess-engine')}
             >
               <svg
                 width="18"
@@ -96,10 +100,18 @@ export default function Settings({
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
-                <path d="M3 7v6h6" />
-                <path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" />
+                <rect x="4" y="4" width="16" height="16" rx="2" />
+                <rect x="9" y="9" width="6" height="6" />
+                <line x1="9" y1="1" x2="9" y2="4" />
+                <line x1="15" y1="1" x2="15" y2="4" />
+                <line x1="9" y1="20" x2="9" y2="23" />
+                <line x1="15" y1="20" x2="15" y2="23" />
+                <line x1="20" y1="9" x2="23" y2="9" />
+                <line x1="20" y1="14" x2="23" y2="14" />
+                <line x1="1" y1="9" x2="4" y2="9" />
+                <line x1="1" y1="14" x2="4" y2="14" />
               </svg>
-              Stockfish Takebacks
+              Chess Engine
             </button>
           </nav>
         </aside>
@@ -109,12 +121,12 @@ export default function Settings({
           <header className="settings-content-header">
             <div>
               <h1>
-                {activeSection === 'board-customization' ? 'Board Customization' : 'Takebacks'}
+                {activeSection === 'board-customization' ? 'Board Customization' : 'Chess Engine'}
               </h1>
               <p className="settings-description">
                 {activeSection === 'board-customization'
                   ? 'Customize the board appearance.'
-                  : 'Configure takeback options for games vs Stockfish.'}
+                  : 'Configure options for games vs Maia chess engine.'}
               </p>
             </div>
             <button className="settings-close-button" onClick={onClose}>
@@ -197,43 +209,62 @@ export default function Settings({
               </section>
             )}
 
-            {activeSection === 'takebacks' && (
-              <section className="settings-section">
-                <h3 className="settings-section-title">Takeback Limit</h3>
-                <p className="settings-section-description">
-                  Set how many takebacks you can use in a game
-                </p>
-                <div className="settings-field">
-                  <input
-                    type="number"
-                    className="settings-input"
-                    min={0}
-                    step={1}
-                    value={takebackLimit === Infinity ? 0 : takebackLimit}
-                    onChange={(e) => {
-                      const next = Number(e.target.value)
-                      onTakebackLimitChange(Number.isNaN(next) ? 0 : Math.max(0, next))
-                    }}
-                    disabled={takebackLimit === Infinity}
-                  />
-                  <label className="settings-checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={takebackLimit === Infinity}
-                      onChange={(e) => {
-                        onTakebackLimitChange(e.target.checked ? Infinity : 0)
-                      }}
-                    />
-                    <span>Unlimited</span>
-                  </label>
-                </div>
-                <div className="settings-info-box">
-                  <p>
-                    <strong>Used:</strong> {takebacksUsed} /{' '}
-                    {takebackLimit === Infinity ? 'Unlimited' : takebackLimit}
+            {activeSection === 'chess-engine' && (
+              <>
+                <section className="settings-section">
+                  <h3 className="settings-section-title">Takeback Limit</h3>
+                  <p className="settings-section-description">
+                    Set how many takebacks you can use in a game
                   </p>
-                </div>
-              </section>
+                  <div className="settings-field">
+                    <input
+                      type="number"
+                      className="settings-input"
+                      min={0}
+                      step={1}
+                      value={takebackLimit === Infinity ? 0 : takebackLimit}
+                      onChange={(e) => {
+                        const next = Number(e.target.value)
+                        onTakebackLimitChange(Number.isNaN(next) ? 0 : Math.max(0, next))
+                      }}
+                      disabled={takebackLimit === Infinity}
+                    />
+                    <label className="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={takebackLimit === Infinity}
+                        onChange={(e) => {
+                          onTakebackLimitChange(e.target.checked ? Infinity : 0)
+                        }}
+                      />
+                      <span>Unlimited</span>
+                    </label>
+                  </div>
+                  <div className="settings-info-box">
+                    <p>
+                      <strong>Used:</strong> {takebacksUsed} /{' '}
+                      {takebackLimit === Infinity ? 'Unlimited' : takebackLimit}
+                    </p>
+                  </div>
+                </section>
+
+                <section className="settings-section">
+                  <h3 className="settings-section-title">Change Difficulty Mid-Game</h3>
+                  <p className="settings-section-description">
+                    Allow changing the AI difficulty level during an active game
+                  </p>
+                  <div className="settings-field">
+                    <label className="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={allowEloChangeMidGame}
+                        onChange={(e) => onAllowEloChangeMidGameChange(e.target.checked)}
+                      />
+                      <span>Allow ELO change mid-game</span>
+                    </label>
+                  </div>
+                </section>
+              </>
             )}
           </div>
         </main>

@@ -10,11 +10,12 @@
     "dev": "vite",
     "debug": "VITE_DEBUG=1 vite",
     "build": "tsc -b && vite build",
+    "engines:download": "node scripts/download-engines.js",
     "test": "vitest run",
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && NODE_ENV=development electron .\"",
-    "electron:build": "npm run build && electron-builder --publish never"
+    "electron:build": "npm run build && node scripts/strip-engines.js && electron-builder --publish never"
   },
   "build": {
     "appId": "com.vibechess.app",
@@ -47,14 +48,17 @@
   "dependencies": {
     "chess.js": "^1.4.0",
     "lucide-react": "^0.562.0",
+    "pako": "^2.1.0",
     "react": "^19.2.0",
     "react-chessboard": "^5.8.4",
     "react-dom": "^19.2.0",
-    "stockfish": "^17.1.0"
+    "stockfish": "^17.1.0",
+    "zerofish": "^0.0.36"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
+    "@types/pako": "^2.0.4",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
