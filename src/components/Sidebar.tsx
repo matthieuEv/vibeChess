@@ -14,6 +14,7 @@ type SidebarProps = {
   colorChoice: ColorChoice
   statusText: string
   isDebugMode: boolean
+  allowEloChangeMidGame: boolean
   onStartGame: () => void
   onStopGame: () => void
   onEnterAnalysis: () => void
@@ -36,6 +37,7 @@ export default function Sidebar({
   colorChoice,
   statusText,
   isDebugMode,
+  allowEloChangeMidGame,
   onStartGame,
   onStopGame,
   onEnterAnalysis,
@@ -93,8 +95,12 @@ export default function Sidebar({
               step={MAIA_STEP}
               value={elo}
               onChange={(e) => onEloChange(Number(e.target.value))}
-              disabled={gameStarted}
-              title={gameStarted ? 'Stop the game to change difficulty' : 'Adjust difficulty'}
+              disabled={gameStarted && !allowEloChangeMidGame}
+              title={
+                gameStarted && !allowEloChangeMidGame
+                  ? 'Enable mid-game difficulty change in settings'
+                  : 'Adjust difficulty'
+              }
             />
             <div className="slider-values">
               <span>{MAIA_MIN_ELO}</span>
@@ -112,8 +118,12 @@ export default function Sidebar({
                   onEloChange(val)
                 }}
                 onBlur={() => onEloChange(elo)}
-                disabled={gameStarted}
-                title={gameStarted ? 'Stop the game to change difficulty' : 'Type to adjust ELO'}
+                disabled={gameStarted && !allowEloChangeMidGame}
+                title={
+                  gameStarted && !allowEloChangeMidGame
+                    ? 'Enable mid-game difficulty change in settings'
+                    : 'Type to adjust ELO'
+                }
               />
               <span>{MAIA_MAX_ELO}</span>
             </div>

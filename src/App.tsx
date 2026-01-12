@@ -148,6 +148,7 @@ function App() {
   const [boardThemeKey, setBoardThemeKey] = useState<BoardThemeKey>('green')
   const [takebackLimit, setTakebackLimit] = useState<number>(Infinity)
   const [takebacksUsed, setTakebacksUsed] = useState(0)
+  const [allowEloChangeMidGame, setAllowEloChangeMidGame] = useState(false)
 
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
@@ -1097,6 +1098,7 @@ function App() {
         colorChoice={colorChoice}
         statusText={statusText}
         isDebugMode={DEBUG_MODE}
+        allowEloChangeMidGame={allowEloChangeMidGame}
         onStartGame={startGameFromSelection}
         onStopGame={stopGame}
         onEnterAnalysis={enterAnalysisMode}
@@ -1267,6 +1269,8 @@ function App() {
         takebackLimit={takebackLimit}
         onTakebackLimitChange={setTakebackLimit}
         takebacksUsed={takebacksUsed}
+        allowEloChangeMidGame={allowEloChangeMidGame}
+        onAllowEloChangeMidGameChange={setAllowEloChangeMidGame}
       />
     </div>
   )
