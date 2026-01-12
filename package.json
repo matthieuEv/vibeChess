@@ -48,6 +48,7 @@
   "dependencies": {
     "chess.js": "^1.4.0",
     "lucide-react": "^0.562.0",
+    "mime-types": "^3.0.2",
     "pako": "^2.1.0",
     "react": "^19.2.0",
     "react-chessboard": "^5.8.4",
