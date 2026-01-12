@@ -117,7 +117,7 @@ export const snapMaiaElo = (value: number): MaiaElo => {
  * @throws {Error} If the weights cannot be fetched
  */
 const readLocalFile = async (fileUrl: string) => {
-  const req = typeof window !== 'undefined' ? (window as typeof window & { require?: any }).require : null
+  const req = typeof window !== 'undefined' ? (window as typeof window & { require?: NodeRequire }).require : null
   if (!req) {
     throw new Error('Local file access is unavailable in this environment.')
   }
@@ -344,13 +344,17 @@ export const createMaiaEngine = async (): Promise<MaiaEngine> => {
         colno: ev.colno,
         error: ev.error?.toString?.() ?? ev.error,
       })
-    } catch {}
+    } catch (e) {
+      logMaia('onGlobalError logging failed', e)
+    }
   }
 
   const onUnhandledRejection = (ev: PromiseRejectionEvent) => {
     try {
       logMaia('unhandledrejection', { reason: ev.reason })
-    } catch {}
+    } catch (e) {
+      logMaia('onUnhandledRejection logging failed', e)
+    }
   }
 
   if (typeof window !== 'undefined') {
@@ -382,17 +386,22 @@ export const createMaiaEngine = async (): Promise<MaiaEngine> => {
       const searchId = Math.random().toString(36).slice(2, 9)
       try {
         // Log memory stats when available to help diagnose OOMs
-        const mem = (performance as any).memory
+        const perfWithMem = performance as unknown as {
+          memory?: { usedJSHeapSize?: number; totalJSHeapSize?: number; jsHeapSizeLimit?: number }
+        }
+        const mem = perfWithMem.memory
         if (mem && typeof mem.usedJSHeapSize === 'number') {
           logMaia('memory before search', {
             searchId,
             usedJSHeapSize: mem.usedJSHeapSize,
             totalJSHeapSize: mem.totalJSHeapSize,
             jsHeapSizeLimit: mem.jsHeapSizeLimit,
-            usedPercent: Math.round((mem.usedJSHeapSize / mem.jsHeapSizeLimit) * 100),
+            usedPercent: Math.round((mem.usedJSHeapSize / (mem.jsHeapSizeLimit ?? 1)) * 100),
           })
         }
-      } catch {}
+      } catch (e) {
+        logMaia('mem read failed', e)
+      }
 
       const net = getNet(elo)
       const params = {
@@ -488,7 +497,7 @@ export const createMaiaEngine = async (): Promise<MaiaEngine> => {
 
       // Detect out-of-memory / abort errors from the WASM worker and retry with fewer nodes.
       const message = (err && typeof err === 'object' && 'message' in err
-        ? String((err as any).message)
+        ? String((err as { message?: unknown }).message)
         : String(err)) || ''
 
       if (/OOM|Out of memory|Aborted/i.test(message)) {
@@ -521,21 +530,25 @@ export const createMaiaEngine = async (): Promise<MaiaEngine> => {
   }
 
   const stop = () => {
-    zerofish.stop()
+    try {
+      zerofish.stop()
+    } catch (e) {
+      logMaia('stop failed', e)
+    }
   }
 
   const quit = () => {
     try {
       zerofish.quit()
       return
-    } catch {
-      // Ignore quit failures; some builds do not expose a quit hook.
+    } catch (e) {
+      logMaia('quit failed', e)
     }
 
     try {
       zerofish.stop()
-    } catch {
-      // Ignore secondary failures during shutdown.
+    } catch (e) {
+      logMaia('stop failed during quit', e)
     }
   }
   // Remove global listeners when the engine is disposed
@@ -544,7 +557,9 @@ export const createMaiaEngine = async (): Promise<MaiaEngine> => {
       window.removeEventListener('error', onGlobalError)
       window.removeEventListener('unhandledrejection', onUnhandledRejection)
     }
-  } catch {}
+  } catch (e) {
+    logMaia('remove listeners failed', e)
+  }
 
   return {
     getBestMove,

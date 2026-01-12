@@ -38,7 +38,7 @@ const DEFAULT_ENGINE_ASSETS: EngineAssets = {
 
 const getIpcRenderer = () => {
   if (typeof window === 'undefined') return null
-  const anyWindow = window as typeof window & { require?: (module: string) => any }
+  const anyWindow = window as typeof window & { require?: (module: string) => unknown }
   if (!anyWindow?.process?.versions?.electron || !anyWindow.require) return null
   try {
     return anyWindow.require('electron').ipcRenderer as {
