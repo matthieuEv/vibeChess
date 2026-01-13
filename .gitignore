@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Playwright
+playwright-report/
+test-results/
+
 # Engine assets (downloaded locally)
 public/engine/
 public/maia/

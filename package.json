@@ -13,6 +13,8 @@
     "build": "tsc -b && vite build",
     "engines:download": "node scripts/download-engines.js",
     "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "lint": "eslint .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && NODE_ENV=development electron .\"",
     "electron:build": "npm run build && node scripts/strip-engines.js && electron-builder --publish never"
@@ -58,6 +60,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.57.0",
     "@types/node": "^24.10.1",
     "@types/pako": "^2.0.4",
     "@types/react": "^19.2.5",

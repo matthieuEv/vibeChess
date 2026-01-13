@@ -56,6 +56,7 @@ type EngineDownloadState = {
 
 const ANALYSIS_THINK_TIME_MS = 1200
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_DEBUG === '1'
+const E2E_MODE = import.meta.env.VITE_E2E === '1'
 const DEBUG_FEN_STORAGE_KEY = 'vibeChess.debug-fen'
 const getCachedDebugFen = () => {
   if (!DEBUG_MODE) return null
@@ -95,6 +96,44 @@ const promptForDebugFen = (fallbackFen: string) => {
     return fallbackFen
   }
   return game.fen()
+}
+
+const pickE2EMove = (fen: string) => {
+  try {
+    const chess = new Chess(fen)
+    const moves = chess.moves({ verbose: true }) as Move[]
+    if (!moves.length) return null
+    const preferred =
+      chess.turn() === 'w'
+        ? ['e2e4', 'd2d4', 'c2c4', 'g1f3']
+        : ['e7e5', 'd7d5', 'c7c5', 'g8f6']
+    const moveSet = new Set(
+      moves.map((move) => `${move.from}${move.to}${move.promotion ?? ''}`),
+    )
+    for (const uci of preferred) {
+      if (moveSet.has(uci)) return uci
+    }
+    const first = moves[0]
+    return `${first.from}${first.to}${first.promotion ?? ''}`
+  } catch {
+    return null
+  }
+}
+
+const buildE2ESuggestions = (fen: string, multiPv: number): Suggestion[] => {
+  try {
+    const chess = new Chess(fen)
+    const moves = chess.moves({ verbose: true }) as Move[]
+    return moves.slice(0, multiPv).map((move, idx) => ({
+      uci: `${move.from}${move.to}${move.promotion ?? ''}`,
+      from: move.from as Square,
+      to: move.to as Square,
+      score: 100 - idx * 10,
+      san: move.san,
+    }))
+  } catch {
+    return []
+  }
 }
 
 function App() {
@@ -198,6 +237,11 @@ function App() {
     if (analysisEngineReady && analysisWorkerRef.current) {
       return Promise.resolve()
     }
+    if (E2E_MODE) {
+      setAnalysisEngineStatus('Stockfish idle (E2E)')
+      setAnalysisEngineReady(true)
+      return Promise.resolve()
+    }
     if (analysisInitPromiseRef.current) {
       return analysisInitPromiseRef.current
     }
@@ -279,6 +323,10 @@ function App() {
   }, [analysisEngineReady, engineAssets, logEngine, sendEngine])
 
   const requestMultiSuggestions = useCallback(async (fen: string, multiPv = 3, requestId?: number) => {
+    if (E2E_MODE) {
+      if (requestId !== undefined && analysisRequestIdRef.current !== requestId) return []
+      return buildE2ESuggestions(fen, multiPv)
+    }
     const suggestions: Suggestion[] = []
     if (!analysisWorkerRef.current) return suggestions
     
@@ -335,7 +383,7 @@ function App() {
   }, [sendEngine, waitForAnalysisReady])
 
   const loadAnalysisSuggestions = useCallback(async (fen: string) => {
-    if (!analysisEngineReady || !analysisWorkerRef.current) {
+    if ((!analysisEngineReady && !E2E_MODE) || (!analysisWorkerRef.current && !E2E_MODE)) {
       setAnalysisLoading(false)
       return
     }
@@ -758,6 +806,18 @@ function App() {
     let cancelled = false
     setBotEngineReady(false)
     setBotEngineStatus('Starting Maia...')
+    if (E2E_MODE) {
+      maiaEngineRef.current = {
+        getBestMove: async (fen: string) => pickE2EMove(fen),
+        stop: () => {},
+        quit: () => {},
+      }
+      setBotEngineReady(true)
+      setBotEngineStatus('Maia ready (E2E)')
+      return () => {
+        maiaEngineRef.current = null
+      }
+    }
     setMaiaAssetPaths({
       zerofishJsUrl: engineAssets.zerofishJsUrl,
       zerofishWasmUrl: engineAssets.zerofishWasmUrl,
