@@ -19,6 +19,7 @@ npm i
 
 ## Run
 - Web dev server: `npm run dev`
+- Electron dev: `npm run electron:dev`
 - Build a desktop app: `npm run electron:build`
 
 ## Engine downloads (packaged app)

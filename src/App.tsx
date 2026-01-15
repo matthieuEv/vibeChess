@@ -11,7 +11,7 @@ import {
 import AnalysisArrowLayer, { type ArrowToDraw } from './components/AnalysisArrowLayer'
 import InfoPanel from './components/InfoPanel'
 import Sidebar from './components/Sidebar'
-import { type ColorChoice, type GameMode, type PlayerColor } from './chess/types'
+import { type ColorChoice, type PlayerColor } from './chess/types'
 import { buildGameOverText, clamp, findKingSquare, isPlayerVictory, uciToSan } from './chess/utils'
 import {
   getMaiaEngine,
@@ -142,7 +142,6 @@ function App() {
   const [boardFen, setBoardFen] = useState(gameRef.current.fen())
   const [playerColor, setPlayerColor] = useState<PlayerColor>('white')
   const [colorChoice, setColorChoice] = useState<ColorChoice>('white')
-  const [gameMode, setGameMode] = useState<GameMode>('vs-maia')
   const [gameStarted, setGameStarted] = useState(false)
   const [botEngineReady, setBotEngineReady] = useState(false)
   const [botEngineStatus, setBotEngineStatus] = useState('Preparing engines...')
@@ -607,8 +606,7 @@ function App() {
       return makeAnalysisMove(sourceSquare, targetSquare)
     }
     if (!gameStarted || gameOver || engineThinking || pendingPromotion) return false
-    // In 1v1 mode, both colors can move; in vs-maia mode, only playerColor can move
-    if (gameMode !== '1v1' && gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return false
+    if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return false
 
     try {
       const legalMove = getPromotionMove(gameRef.current, sourceSquare, targetSquare)
@@ -647,8 +645,7 @@ function App() {
     }
 
     if (!gameStarted || gameOver || engineThinking) return
-    // In 1v1 mode, both colors can move; in vs-maia mode, only playerColor can move
-    if (gameMode !== '1v1' && gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return
+    if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return
 
     if (selectedSquare) {
       const move = onDrop(selectedSquare, squareTyped)
@@ -656,13 +653,7 @@ function App() {
     }
 
     const currentPiece = gameRef.current.get(squareTyped)
-    // In 1v1 mode, allow selecting any piece of the current turn's color
-    const currentTurn = gameRef.current.turn()
-    const canSelectPiece = gameMode === '1v1'
-      ? currentPiece && currentPiece.color === currentTurn
-      : currentPiece && currentPiece.color === (playerColor === 'white' ? 'w' : 'b')
-    
-    if (canSelectPiece) {
+    if (currentPiece && currentPiece.color === (playerColor === 'white' ? 'w' : 'b')) {
       setSelectedSquare(squareTyped)
     } else {
       setSelectedSquare(null)
@@ -888,8 +879,6 @@ function App() {
   }, [gameOver])
 
   useEffect(() => {
-    // In 1v1 mode, Maia doesn't play
-    if (gameMode === '1v1') return
     if (!gameStarted || gameOver || !botEngineReady || analysisMode || engineThinking) return
     if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) {
       if (!maiaEngineRef.current) return
@@ -935,7 +924,7 @@ function App() {
           }
         })
     }
-  }, [boardFen, botEngineReady, gameOver, analysisMode, gameStarted, playerColor, elo, requestMaiaMove, engineThinking, gameMode])
+  }, [boardFen, botEngineReady, gameOver, analysisMode, gameStarted, playerColor, elo, requestMaiaMove, engineThinking])
 
   const turnText = useMemo(() => {
     if (analysisMode) {
@@ -955,21 +944,14 @@ function App() {
       }
     }
 
-    if (!gameStarted) {
-      return gameMode === '1v1' ? 'Select 1v1 mode, then start the game' : 'Choose your color, then start the game'
-    }
+    if (!gameStarted) return 'Choose your color, then start the game'
     if (gameOver) return gameOver
-    if (gameMode === '1v1') {
-      const turn = gameRef.current.turn() === 'w' ? 'White' : 'Black'
-      const checkText = isInCheck ? ' (Check!)' : ''
-      return `${turn} to move${checkText}`
-    }
     if (!botEngineReady) return 'Maia getting ready...'
     if (engineThinking) return 'Maia is thinking...'
     const turn = gameRef.current.turn() === 'w' ? 'White' : 'Black'
     const checkText = isInCheck ? ' (Check!)' : ''
     return `${turn} to move${checkText}`
-  }, [analysisMode, fenToShow, analysisEntries, analysisIndex, botEngineReady, engineThinking, gameStarted, gameOver, isInCheck, gameMode])
+  }, [analysisMode, fenToShow, analysisEntries, analysisIndex, botEngineReady, engineThinking, gameStarted, gameOver, isInCheck])
 
   const statusText = useMemo(() => {
     if (!botEngineReady) return botEngineStatus
@@ -987,12 +969,6 @@ function App() {
     if (DEBUG_MODE) return
     if (gameStarted) return
     setColorChoice(color)
-  }
-
-  const handleGameModeChange = (mode: GameMode) => {
-    if (DEBUG_MODE) return
-    if (gameStarted) return
-    setGameMode(mode)
   }
 
   const handleEloChange = (value: number) => {
@@ -1103,21 +1079,17 @@ function App() {
     history.length > 0 &&
     (takebackLimit === Infinity || takebacksUsed < takebackLimit)
   const promotionPieceTypes = useMemo(() => {
-    // In 1v1 mode, use the current turn's color; otherwise use playerColor
-    const currentColor = gameMode === '1v1' ? gameRef.current.turn() : (playerColor === 'white' ? 'w' : 'b')
-    const colorPrefix = currentColor === 'w' ? 'w' : 'b'
+    const colorPrefix = playerColor === 'white' ? 'w' : 'b'
     return (['q', 'r', 'b', 'n'] as PieceSymbol[]).map((piece) => ({
       piece,
       key: `${colorPrefix}${piece.toUpperCase()}`,
     }))
-  }, [playerColor, gameMode, boardFen])
+  }, [playerColor])
 
   const handleTakeback = () => {
     if (!canTakeback) return
-    // In 1v1 mode, undo only 1 move; in vs-maia mode, undo 2 moves (player + bot)
-    const movesToUndo = gameMode === '1v1' ? 1 : 2
     let undone = 0
-    while (undone < movesToUndo && gameRef.current.history().length > 0) {
+    while (undone < 2 && gameRef.current.history().length > 0) {
       const move = gameRef.current.undo()
       if (!move) break
       undone += 1
@@ -1146,7 +1118,6 @@ function App() {
         remainingTakebacks={remainingTakebacks}
         elo={elo}
         colorChoice={colorChoice}
-        gameMode={gameMode}
         statusText={statusText}
         isDebugMode={DEBUG_MODE}
         allowEloChangeMidGame={allowEloChangeMidGame}
@@ -1157,7 +1128,6 @@ function App() {
         onTakeback={handleTakeback}
         onEloChange={handleEloChange}
         onColorChange={handleColorChange}
-        onGameModeChange={handleGameModeChange}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
@@ -1168,7 +1138,7 @@ function App() {
               options={{
                 id: 'vs-maia',
                 position: fenToShow,
-                boardOrientation: gameMode === '1v1' ? 'white' : playerColor,
+                boardOrientation: playerColor,
                 allowDragging: analysisMode || (gameStarted && !engineThinking && !gameOver),
                 boardStyle: {
                   width: '100%',
