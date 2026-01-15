@@ -26,6 +26,7 @@ import {
   type EngineAssets,
   type EngineDownloadEvent,
 } from './engine/engineAssets'
+import { loadPlayerConfig, savePlayerConfig, type PlayerConfig } from './playerConfig'
 import Settings, { BOARD_THEMES, type BoardThemeKey } from './Settings'
 
 type Suggestion = {
@@ -175,6 +176,7 @@ function App() {
   const [takebackLimit, setTakebackLimit] = useState<number>(Infinity)
   const [takebacksUsed, setTakebacksUsed] = useState(0)
   const [allowEloChangeMidGame, setAllowEloChangeMidGame] = useState(false)
+  const [configReady, setConfigReady] = useState(false)
 
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
@@ -199,6 +201,45 @@ function App() {
       console.info('[Stockfish]', ...args)
     }
   }, [ensureEngineAssets])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadConfig = async () => {
+      try {
+        const config = await loadPlayerConfig()
+        if (cancelled || !config) return
+        if (config.gameMode) setGameMode(config.gameMode)
+        if (config.colorChoice) setColorChoice(config.colorChoice)
+        if (config.elo !== undefined) setElo(config.elo)
+        if (config.boardTheme) setBoardThemeKey(config.boardTheme)
+        if (config.takebackLimit !== undefined) setTakebackLimit(config.takebackLimit)
+        if (config.allowEloChangeMidGame !== undefined) {
+          setAllowEloChangeMidGame(config.allowEloChangeMidGame)
+        }
+      } finally {
+        if (!cancelled) setConfigReady(true)
+      }
+    }
+
+    void loadConfig()
+    return () => {
+      cancelled = true
+    }
+  }, [setAllowEloChangeMidGame, setBoardThemeKey, setColorChoice, setElo, setGameMode, setTakebackLimit])
+
+  useEffect(() => {
+    if (!configReady) return
+    const payload: PlayerConfig = {
+      gameMode,
+      colorChoice,
+      elo,
+      boardTheme: boardThemeKey,
+      takebackLimit,
+      allowEloChangeMidGame,
+    }
+    void savePlayerConfig(payload)
+  }, [allowEloChangeMidGame, boardThemeKey, colorChoice, configReady, elo, gameMode, takebackLimit])
 
   const sendEngine = useCallback((cmd: string) => {
     const worker = analysisWorkerRef.current

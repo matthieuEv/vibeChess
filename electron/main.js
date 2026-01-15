@@ -30,6 +30,7 @@ const MAIA_DOWNLOAD_BASE_URL = normalizeBaseUrl(
 const VIBECHESS_DIR_NAME = '.vibeChess';
 const ENGINE_DIR_NAME = 'engine';
 const MAIA_DIR_NAME = 'maia';
+const CONFIG_FILE_NAME = 'config.json';
 const STOCKFISH_JS = 'stockfish-17.1-lite-single-03e3232.js';
 const STOCKFISH_WASM = 'stockfish-17.1-lite-single-03e3232.wasm';
 const ZEROFISH_JS = 'zerofishEngine.js';
@@ -122,6 +123,7 @@ const ENGINE_ASSETS = LEGACY_ENGINE_DOWNLOAD_BASE_URL
     ];
 
 const getVibeChessDir = () => path.join(app.getPath('home'), VIBECHESS_DIR_NAME);
+const getConfigPath = () => path.join(getVibeChessDir(), CONFIG_FILE_NAME);
 
 const buildEnginePaths = (baseDir, serverPort) => {
   if (serverPort) {
@@ -154,6 +156,26 @@ const fileExists = async (filePath) => {
   } catch {
     return false;
   }
+};
+
+const readConfigFile = async () => {
+  const configPath = getConfigPath();
+  try {
+    const raw = await fs.promises.readFile(configPath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+const writeConfigFile = async (payload) => {
+  const configPath = getConfigPath();
+  await fs.promises.mkdir(getVibeChessDir(), { recursive: true });
+  const tempPath = `${configPath}.tmp`;
+  const json = JSON.stringify(payload ?? {}, null, 2);
+  await fs.promises.writeFile(tempPath, json, 'utf8');
+  await fs.promises.rename(tempPath, configPath);
+  return true;
 };
 
 const toNodeStream = (body) => {
@@ -207,6 +229,14 @@ const sendDownloadEvent = (webContentsSet, payload) => {
 };
 
 let activeDownload = null;
+
+ipcMain.handle('config:read', async () => {
+  return readConfigFile();
+});
+
+ipcMain.handle('config:write', async (_event, payload) => {
+  return writeConfigFile(payload);
+});
 
 const ensureEngineAssets = async (webContentsSet, serverPort) => {
   const baseDir = getVibeChessDir();
