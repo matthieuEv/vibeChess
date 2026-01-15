@@ -1,0 +1,141 @@
+.game-mode-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+
+.game-mode-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e9eef6;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: 100%;
+  text-align: left;
+}
+
+.game-mode-dropdown-trigger:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.game-mode-dropdown-trigger.open {
+  border-color: var(--accent);
+  background: rgba(89, 224, 179, 0.08);
+}
+
+.game-mode-dropdown-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.game-mode-dropdown-trigger .game-mode-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.game-mode-dropdown-trigger .game-mode-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.game-mode-dropdown-trigger .chevron {
+  color: var(--muted);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.game-mode-dropdown-trigger .chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.game-mode-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  list-style: none;
+  z-index: 50;
+  animation: dropdownFadeIn 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.game-mode-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.game-mode-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.game-mode-dropdown-item.selected {
+  background: rgba(89, 224, 179, 0.12);
+}
+
+.game-mode-dropdown-item .game-mode-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: color 0.12s ease;
+}
+
+.game-mode-dropdown-item.selected .game-mode-icon,
+.game-mode-dropdown-item:hover .game-mode-icon {
+  color: var(--accent);
+}
+
+.game-mode-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.game-mode-dropdown-item .game-mode-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e9eef6;
+}
+
+.game-mode-dropdown-item.selected .game-mode-name {
+  color: var(--accent);
+}
+
+.game-mode-description {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

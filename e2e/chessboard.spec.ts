@@ -172,3 +172,126 @@ test('random color starts a playable game', async ({ page }) => {
   await page.locator(squareSelector('e5')).click()
   await expect(page.locator(pieceSelector('e5', 'bP'))).toBeVisible()
 })
+
+// 1v1 Mode Tests
+const select1v1Mode = async (page: Page) => {
+  const dropdown = page.locator('.game-mode-dropdown-trigger')
+  await dropdown.click()
+  const oneVsOneOption = page.locator('.game-mode-dropdown-item').filter({ hasText: '1v1 Local' })
+  await oneVsOneOption.click()
+  await expect(dropdown).toContainText('1v1 Local')
+}
+
+test('1v1 mode selector is visible and selectable', async ({ page }) => {
+  const dropdown = page.locator('.game-mode-dropdown-trigger')
+  await expect(dropdown).toBeVisible()
+  
+  // Vs Maia should be selected by default
+  await expect(dropdown).toContainText('Vs Maia')
+  
+  // Open dropdown
+  await dropdown.click()
+  const menu = page.locator('.game-mode-dropdown-menu')
+  await expect(menu).toBeVisible()
+  
+  // Select 1v1 mode
+  const oneVsOneOption = page.locator('.game-mode-dropdown-item').filter({ hasText: '1v1 Local' })
+  await oneVsOneOption.click()
+  
+  // Verify selection
+  await expect(dropdown).toContainText('1v1 Local')
+  await expect(menu).toHaveCount(0) // Menu should close
+})
+
+test('1v1 mode hides ELO slider and color selector', async ({ page }) => {
+  // In vs-maia mode, ELO slider and color selector are visible
+  const slider = page.getByRole('slider')
+  const colorToggle = page.locator('.toggle')
+  
+  await expect(slider).toBeVisible()
+  await expect(colorToggle).toBeVisible()
+  
+  // Switch to 1v1 mode
+  await select1v1Mode(page)
+  
+  // ELO slider and color selector should be hidden
+  await expect(slider).toHaveCount(0)
+  await expect(colorToggle).toHaveCount(0)
+})
+
+test('1v1 mode allows both players to move', async ({ page }) => {
+  await select1v1Mode(page)
+  await startGame(page)
+  
+  // White moves
+  await page.locator(squareSelector('e2')).click()
+  await page.locator(squareSelector('e4')).click()
+  await expect(page.locator(pieceSelector('e4', 'wP'))).toBeVisible()
+  
+  // Black moves (no waiting for Maia)
+  await page.locator(squareSelector('e7')).click()
+  await page.locator(squareSelector('e5')).click()
+  await expect(page.locator(pieceSelector('e5', 'bP'))).toBeVisible()
+  
+  // White moves again
+  await page.locator(squareSelector('g1')).click()
+  await page.locator(squareSelector('f3')).click()
+  await expect(page.locator(pieceSelector('f3', 'wN'))).toBeVisible()
+})
+
+test('1v1 mode drag and drop works for both colors', async ({ page }) => {
+  await select1v1Mode(page)
+  await startGame(page)
+  
+  // White moves with drag
+  await dragPiece(page, 'd2', 'd4')
+  await expect(page.locator(pieceSelector('d4', 'wP'))).toBeVisible()
+  
+  // Black moves with drag
+  await dragPiece(page, 'd7', 'd5')
+  await expect(page.locator(pieceSelector('d5', 'bP'))).toBeVisible()
+})
+
+test('1v1 mode takeback undoes only one move', async ({ page }) => {
+  await select1v1Mode(page)
+  await startGame(page)
+  
+  // White moves
+  await page.locator(squareSelector('e2')).click()
+  await page.locator(squareSelector('e4')).click()
+  await expect(page.locator(pieceSelector('e4', 'wP'))).toBeVisible()
+  
+  // Black moves
+  await page.locator(squareSelector('e7')).click()
+  await page.locator(squareSelector('e5')).click()
+  await expect(page.locator(pieceSelector('e5', 'bP'))).toBeVisible()
+  
+  // Takeback should only undo Black's move
+  const takebackButton = page.getByRole('button', { name: /Take Back/ })
+  await takebackButton.click()
+  
+  // Black's move should be undone
+  await expect(page.locator(pieceSelector('e7', 'bP'))).toBeVisible()
+  await expect(page.locator(pieceSelector('e5', 'bP'))).toHaveCount(0)
+  
+  // White's move should still be there
+  await expect(page.locator(pieceSelector('e4', 'wP'))).toBeVisible()
+})
+
+test('1v1 mode can be started immediately without engine', async ({ page }) => {
+  await select1v1Mode(page)
+  
+  // Start button should be enabled even without waiting for engine
+  const startButton = page.getByRole('button', { name: 'Start Game' })
+  await expect(startButton).toBeEnabled()
+  
+  // Status should show 1v1 mode
+  await expect(page.locator('.status-text')).toContainText('1v1')
+})
+
+test('game mode selector is disabled during game', async ({ page }) => {
+  await startGame(page)
+  
+  const dropdown = page.locator('.game-mode-dropdown-trigger')
+  await expect(dropdown).toBeDisabled()
+})
