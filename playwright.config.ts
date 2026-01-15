@@ -12,12 +12,10 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: 'npx vite preview --host 127.0.0.1 --port 4173',
+    command:
+      'npx vite build --mode e2e && npx vite preview --host 127.0.0.1 --port 4173 --strictPort',
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: !process.env.CI,
-    env: {
-      VITE_E2E: '1',
-    },
   },
   projects: [
     {
