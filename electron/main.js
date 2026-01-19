@@ -9,6 +9,13 @@ import { lookup } from 'mime-types';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === 'development';
+const userDataProfile = process.env.VIBECHESS_PROFILE;
+if (userDataProfile) {
+  const safeProfile = userDataProfile.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (safeProfile) {
+    app.setPath('userData', path.join(app.getPath('userData'), safeProfile));
+  }
+}
 const normalizeBaseUrl = (value) => (value.endsWith('/') ? value : `${value}/`);
 const LEGACY_ENGINE_DOWNLOAD_BASE_URL =
   process.env.VIBE_ENGINE_DOWNLOAD_BASE_URL || process.env.VITE_ENGINE_DOWNLOAD_BASE_URL;

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Bot, Users, ChevronDown } from 'lucide-react'
+import { Bot, Users, Wifi, ChevronDown } from 'lucide-react'
 import { GAME_MODES, type GameMode } from '../chess/types'
 import './GameModeSelector.css'
 
@@ -12,6 +12,7 @@ type GameModeSelectorProps = {
 const ICON_MAP = {
   bot: Bot,
   users: Users,
+  wifi: Wifi,
 }
 
 export default function GameModeSelector({

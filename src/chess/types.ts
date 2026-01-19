@@ -1,13 +1,13 @@
 export type PlayerColor = 'white' | 'black'
 export type ColorChoice = PlayerColor | 'random'
 
-export type GameMode = 'vs-maia' | '1v1'
+export type GameMode = 'vs-maia' | '1v1' | 'online'
 
 export interface GameModeInfo {
   id: GameMode
   name: string
   description: string
-  icon: 'bot' | 'users'
+  icon: 'bot' | 'users' | 'wifi'
 }
 
 export const GAME_MODES: GameModeInfo[] = [
@@ -22,5 +22,11 @@ export const GAME_MODES: GameModeInfo[] = [
     name: '1v1 Local',
     description: 'Jouez à deux sur le même écran',
     icon: 'users',
+  },
+  {
+    id: 'online',
+    name: 'Online',
+    description: 'Jouez en ligne via code',
+    icon: 'wifi',
   },
 ]

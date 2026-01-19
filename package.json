@@ -7,7 +7,8 @@
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "npm run build && electron .",
+    "dev": "npm run build && concurrently -k -n server,app \"electron .\"",
+    "dev:dual": "npm run build && concurrently -k -n server,app1,app2 \"VIBECHESS_PROFILE=one electron .\" \"VIBECHESS_PROFILE=two electron .\"",
     "dev:clean": "rm -fr ~/.vibeChess && npm run build && electron .",
     "dev:debug": "VITE_DEBUG=1 vite",
     "build": "tsc -b && vite build",

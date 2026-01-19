@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Settings as SettingsIcon } from 'lucide-react'
 import type { ColorChoice, GameMode } from '../chess/types'
 import { MAIA_MAX_ELO, MAIA_MIN_ELO, MAIA_STEP } from '../engine/maiaEngine'
@@ -15,8 +16,14 @@ type SidebarProps = {
   colorChoice: ColorChoice
   gameMode: GameMode
   statusText: string
+  statusOk: boolean
+  statusHeadline?: string
+  statusDetail?: string
+  statusHeadlineTone?: 'accent' | 'neutral' | 'warn'
+  statusDotTone?: 'ok' | 'warn' | 'error'
   isDebugMode: boolean
   allowEloChangeMidGame: boolean
+  onlinePanel?: ReactNode
   onStartGame: () => void
   onStopGame: () => void
   onEnterAnalysis: () => void
@@ -41,8 +48,14 @@ export default function Sidebar({
   colorChoice,
   gameMode,
   statusText,
+  statusOk,
+  statusHeadline,
+  statusDetail,
+  statusHeadlineTone,
+  statusDotTone,
   isDebugMode,
   allowEloChangeMidGame,
+  onlinePanel,
   onStartGame,
   onStopGame,
   onEnterAnalysis,
@@ -54,7 +67,9 @@ export default function Sidebar({
   onOpenSettings,
 }: SidebarProps) {
   const is1v1Mode = gameMode === '1v1'
-  const canStartGame = is1v1Mode || botEngineReady
+  const isOnlineMode = gameMode === 'online'
+  const isBotMode = gameMode === 'vs-maia'
+  const canStartGame = is1v1Mode || (isBotMode && botEngineReady)
 
   return (
     <nav className="sidebar">
@@ -69,38 +84,46 @@ export default function Sidebar({
           onModeChange={onGameModeChange}
         />
 
-        <div className="menu-group">
-          <button
-            className={gameStarted ? 'danger' : 'primary'}
-            onClick={gameStarted ? onStopGame : onStartGame}
-            disabled={!canStartGame}
-          >
-            {gameStarted ? 'Stop the Game' : 'Start Game'}
-          </button>
-          <button
-            className="ghost"
-            onClick={analysisMode ? onExitAnalysis : onEnterAnalysis}
-            disabled={
-              !analysisMode && (!analysisAvailable || engineThinking)
-            }
-          >
-            {analysisMode ? 'Exit Analysis' : 'Analyze Game'}
-          </button>
-          <button
-            className="ghost"
-            onClick={onTakeback}
-            disabled={!canTakeback}
-            title={
-              canTakeback
-                ? `Takebacks remaining: ${remainingTakebacks === Infinity ? 'Unlimited' : remainingTakebacks}`
-                : 'No takebacks available'
-            }
-          >
-            Take Back{remainingTakebacks === Infinity ? '' : ` (${remainingTakebacks})`}
-          </button>
-        </div>
+        {isOnlineMode && onlinePanel && (
+          <div className="menu-group">
+            {onlinePanel}
+          </div>
+        )}
 
-        {!is1v1Mode && (
+        {!isOnlineMode && (
+          <div className="menu-group">
+            <button
+              className={gameStarted ? 'danger' : 'primary'}
+              onClick={gameStarted ? onStopGame : onStartGame}
+              disabled={!canStartGame}
+            >
+              {gameStarted ? 'Stop the Game' : 'Start Game'}
+            </button>
+            <button
+              className="ghost"
+              onClick={analysisMode ? onExitAnalysis : onEnterAnalysis}
+              disabled={
+                !analysisMode && (!analysisAvailable || engineThinking)
+              }
+            >
+              {analysisMode ? 'Exit Analysis' : 'Analyze Game'}
+            </button>
+            <button
+              className="ghost"
+              onClick={onTakeback}
+              disabled={!canTakeback}
+              title={
+                canTakeback
+                  ? `Takebacks remaining: ${remainingTakebacks === Infinity ? 'Unlimited' : remainingTakebacks}`
+                  : 'No takebacks available'
+              }
+            >
+              Take Back{remainingTakebacks === Infinity ? '' : ` (${remainingTakebacks})`}
+            </button>
+          </div>
+        )}
+
+        {isBotMode && (
           <div className="menu-group">
             <p className="label">Maia Difficulty (ELO)</p>
             <div className="slider">
@@ -147,7 +170,7 @@ export default function Sidebar({
           </div>
         )}
 
-        {!is1v1Mode && (
+        {isBotMode && (
           <div className="menu-group">
             <p className="label">Your Color</p>
             <div className="toggle">
@@ -178,14 +201,21 @@ export default function Sidebar({
       </div>
 
       <div style={{ marginTop: 'auto' }}>
-        <div className="status-row">
-          <span className={`status-dot ${is1v1Mode || botEngineReady ? 'ok' : 'wait'}`} />
-          <span className="status-text" style={{ fontSize: 12 }}>
-            {is1v1Mode ? 'Mode 1v1 Local' : statusText}
-          </span>
-          <button className="settings-button" onClick={onOpenSettings} title="Settings">
-            <SettingsIcon size={20} />
-          </button>
+        <div className="status-block">
+          {statusHeadline && (
+            <div className={`status-headline${statusHeadlineTone ? ` ${statusHeadlineTone}` : ''}`}>
+              {statusHeadline}
+            </div>
+          )}
+          <div className="status-row">
+            <span className={`status-dot ${statusDotTone ?? (statusOk ? 'ok' : 'warn')}`} />
+            <span className="status-text">
+              {statusDetail ?? (is1v1Mode ? 'Mode 1v1 Local' : statusText)}
+            </span>
+            <button className="settings-button" onClick={onOpenSettings} title="Settings">
+              <SettingsIcon size={20} />
+            </button>
+          </div>
         </div>
       </div>
     </nav>
