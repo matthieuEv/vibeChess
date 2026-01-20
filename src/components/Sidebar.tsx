@@ -84,6 +84,12 @@ export default function Sidebar({
           onModeChange={onGameModeChange}
         />
 
+        {isOnlineMode && statusHeadline && (
+          <div className={`online-turn-indicator ${statusHeadlineTone ?? ''}`}>
+            {statusHeadline}
+          </div>
+        )}
+
         {isOnlineMode && onlinePanel && (
           <div className="menu-group">
             {onlinePanel}
@@ -202,7 +208,7 @@ export default function Sidebar({
 
       <div style={{ marginTop: 'auto' }}>
         <div className="status-block">
-          {statusHeadline && (
+          {!isOnlineMode && statusHeadline && (
             <div className={`status-headline${statusHeadlineTone ? ` ${statusHeadlineTone}` : ''}`}>
               {statusHeadline}
             </div>
