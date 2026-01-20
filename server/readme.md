@@ -8,6 +8,19 @@ cd server
 go run .
 ```
 
+## Docker
+```bash
+cd server
+docker compose up
+```
+
+The published `ghcr.io/matthieuev/vibechess-server:latest` image targets `linux/amd64` and `linux/arm64`.
+
+To build locally instead:
+```bash
+docker compose up --build
+```
+
 ## Environment
 - `PORT` (default `8080`)
 - `ALLOWED_ORIGINS` (comma-separated). Example:

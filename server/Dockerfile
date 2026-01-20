@@ -2,8 +2,8 @@ FROM golang:1.21-bookworm AS builder
 
 WORKDIR /app
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
 COPY go.mod go.sum ./
 RUN go mod download
