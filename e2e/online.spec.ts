@@ -65,24 +65,26 @@ test('online mode syncs moves between players', async ({ browser }) => {
 
     await expect(whitePage.locator('.status-text')).toContainText('Opponent connected')
     await expect(blackPage.locator('.status-text')).toContainText('Opponent connected')
-    await expect(whitePage.locator('.status-headline')).toHaveText('Your turn')
-    await expect(blackPage.locator('.status-headline')).toHaveText('Opponent turn')
+    const whiteTurnIndicator = whitePage.locator('.online-turn-indicator')
+    const blackTurnIndicator = blackPage.locator('.online-turn-indicator')
+    await expect(whiteTurnIndicator).toHaveText('Your turn')
+    await expect(blackTurnIndicator).toHaveText('Opponent turn')
 
     await whitePage.locator(squareSelector('e2')).click()
     await whitePage.locator(squareSelector('e4')).click()
     await expect(whitePage.locator(pieceSelector('e4', 'wP'))).toBeVisible()
     await expect(blackPage.locator(pieceSelector('e4', 'wP'))).toBeVisible()
 
-    await expect(whitePage.locator('.status-headline')).toHaveText('Opponent turn')
-    await expect(blackPage.locator('.status-headline')).toHaveText('Your turn')
+    await expect(whiteTurnIndicator).toHaveText('Opponent turn')
+    await expect(blackTurnIndicator).toHaveText('Your turn')
 
     await blackPage.locator(squareSelector('e7')).click()
     await blackPage.locator(squareSelector('e5')).click()
     await expect(blackPage.locator(pieceSelector('e5', 'bP'))).toBeVisible()
     await expect(whitePage.locator(pieceSelector('e5', 'bP'))).toBeVisible()
 
-    await expect(whitePage.locator('.status-headline')).toHaveText('Your turn')
-    await expect(blackPage.locator('.status-headline')).toHaveText('Opponent turn')
+    await expect(whiteTurnIndicator).toHaveText('Your turn')
+    await expect(blackTurnIndicator).toHaveText('Opponent turn')
   } finally {
     await whiteContext.close()
     await blackContext.close()

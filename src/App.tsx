@@ -67,9 +67,11 @@ const DEFAULT_WS_URL = (() => {
     if (trimmed) return trimmed
   }
   if (import.meta.env.DEV) return 'ws://localhost:8080/ws'
-  if (typeof window === 'undefined') return 'ws://localhost:8080/ws'
+  const prodUrl = 'wss://vibechess.matthieu-evain.fr/ws'
+  if (import.meta.env.PROD) return prodUrl
+  if (typeof window === 'undefined') return prodUrl
   const host = window.location.host
-  if (!host) return 'ws://localhost:8080/ws'
+  if (!host) return prodUrl
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
   return `${protocol}://${host}/ws`
 })()
@@ -953,7 +955,7 @@ function App() {
 
   const leaveOnlineGame = useCallback(() => {
     clearOnlineSession()
-    wsClientRef.current?.disconnect()
+    wsClientRef.current?.clearSession()
   }, [clearOnlineSession])
 
   const createOnlineGame = useCallback(() => {
