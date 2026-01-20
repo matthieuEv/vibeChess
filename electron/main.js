@@ -9,12 +9,12 @@ import { lookup } from 'mime-types';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === 'development';
-const userDataProfile = process.env.VIBECHESS_PROFILE;
-if (userDataProfile) {
-  const safeProfile = userDataProfile.replace(/[^a-zA-Z0-9_-]/g, '');
-  if (safeProfile) {
-    app.setPath('userData', path.join(app.getPath('userData'), safeProfile));
-  }
+const userDataProfile = process.env.VIBECHESS_PROFILE ?? '';
+const safeProfile = userDataProfile
+  ? userDataProfile.replace(/[^a-zA-Z0-9_-]/g, '')
+  : '';
+if (safeProfile) {
+  app.setPath('userData', path.join(app.getPath('userData'), safeProfile));
 }
 const normalizeBaseUrl = (value) => (value.endsWith('/') ? value : `${value}/`);
 const LEGACY_ENGINE_DOWNLOAD_BASE_URL =
@@ -37,7 +37,7 @@ const MAIA_DOWNLOAD_BASE_URL = normalizeBaseUrl(
 const VIBECHESS_DIR_NAME = '.vibeChess';
 const ENGINE_DIR_NAME = 'engine';
 const MAIA_DIR_NAME = 'maia';
-const CONFIG_FILE_NAME = 'config.json';
+const CONFIG_FILE_NAME = safeProfile ? `config.${safeProfile}.json` : 'config.json';
 const STOCKFISH_JS = 'stockfish-17.1-lite-single-03e3232.js';
 const STOCKFISH_WASM = 'stockfish-17.1-lite-single-03e3232.wasm';
 const ZEROFISH_JS = 'zerofishEngine.js';
@@ -178,7 +178,9 @@ const readConfigFile = async () => {
 const writeConfigFile = async (payload) => {
   const configPath = getConfigPath();
   await fs.promises.mkdir(getVibeChessDir(), { recursive: true });
-  const tempPath = `${configPath}.tmp`;
+  const tempPath = `${configPath}.${process.pid}.${Date.now()}.${Math.random()
+    .toString(16)
+    .slice(2)}.tmp`;
   const json = JSON.stringify(payload ?? {}, null, 2);
   await fs.promises.writeFile(tempPath, json, 'utf8');
   await fs.promises.rename(tempPath, configPath);

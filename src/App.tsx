@@ -60,6 +60,19 @@ type EngineDownloadState = {
 const ANALYSIS_THINK_TIME_MS = 1200
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_DEBUG === '1'
 const E2E_MODE = import.meta.env.VITE_E2E === '1'
+const DEFAULT_WS_URL = (() => {
+  const envWsUrl = import.meta.env.VITE_WS_URL
+  if (typeof envWsUrl === 'string') {
+    const trimmed = envWsUrl.trim()
+    if (trimmed) return trimmed
+  }
+  if (import.meta.env.DEV) return 'ws://localhost:8080/ws'
+  if (typeof window === 'undefined') return 'ws://localhost:8080/ws'
+  const host = window.location.host
+  if (!host) return 'ws://localhost:8080/ws'
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${protocol}://${host}/ws`
+})()
 const DEBUG_FEN_STORAGE_KEY = 'vibeChess.debug-fen'
 const getCachedDebugFen = () => {
   if (!DEBUG_MODE) return null
@@ -207,7 +220,7 @@ function App() {
   const [onlineLastSyncFen, setOnlineLastSyncFen] = useState<string | null>(null)
   const [onlineAwaitingSync, setOnlineAwaitingSync] = useState(false)
   const [onlineDesync, setOnlineDesync] = useState(false)
-  const [wsUrl, setWsUrl] = useState('ws://localhost:8080/ws')
+  const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL)
 
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)

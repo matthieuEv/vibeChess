@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    name: Tests
+  application:
+    name: Application
     runs-on: ubuntu-latest
 
     steps:
@@ -41,9 +41,28 @@ jobs:
       - name: Run e2e tests
         run: npm run test:e2e
 
+  server:
+    name: Server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.21
+          cache: true
+          cache-dependency-path: server/go.sum
+
+      - name: Run server tests
+        working-directory: server
+        run: go test ./...
+
   build:
     name: Build on ${{ matrix.os }}
-    needs: test
+    needs: [application, server]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -87,9 +106,59 @@ jobs:
             release/*.AppImage
           if-no-files-found: warn
 
+  docker:
+    name: Docker Image
+    needs: [application, server]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Prepare image name
+        shell: bash
+        run: |
+          OWNER_LOWER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME=ghcr.io/${OWNER_LOWER}/vibechess-server" >> "$GITHUB_ENV"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, docker]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
