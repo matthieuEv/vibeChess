@@ -10,6 +10,7 @@ import {
 } from './chessHelpers'
 import AnalysisArrowLayer, { type ArrowToDraw } from './components/AnalysisArrowLayer'
 import InfoPanel from './components/InfoPanel'
+import OnlinePanel from './components/OnlinePanel'
 import Sidebar from './components/Sidebar'
 import { type ColorChoice, type GameMode, type PlayerColor } from './chess/types'
 import { buildGameOverText, clamp, findKingSquare, isPlayerVictory, uciToSan } from './chess/utils'
@@ -28,6 +29,7 @@ import {
 } from './engine/engineAssets'
 import { loadPlayerConfig, savePlayerConfig, type PlayerConfig } from './playerConfig'
 import Settings, { BOARD_THEMES, type BoardThemeKey } from './Settings'
+import { WsClient, type OnlineRole, type WsStatus } from './online/wsClient'
 
 type Suggestion = {
   uci: string
@@ -58,6 +60,19 @@ type EngineDownloadState = {
 const ANALYSIS_THINK_TIME_MS = 1200
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_DEBUG === '1'
 const E2E_MODE = import.meta.env.VITE_E2E === '1'
+const DEFAULT_WS_URL = (() => {
+  const envWsUrl = import.meta.env.VITE_WS_URL
+  if (typeof envWsUrl === 'string') {
+    const trimmed = envWsUrl.trim()
+    if (trimmed) return trimmed
+  }
+  if (import.meta.env.DEV) return 'ws://localhost:8080/ws'
+  if (typeof window === 'undefined') return 'ws://localhost:8080/ws'
+  const host = window.location.host
+  if (!host) return 'ws://localhost:8080/ws'
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${protocol}://${host}/ws`
+})()
 const DEBUG_FEN_STORAGE_KEY = 'vibeChess.debug-fen'
 const getCachedDebugFen = () => {
   if (!DEBUG_MODE) return null
@@ -83,6 +98,23 @@ const createGameFromFen = (fen: string) => {
   } catch {
     return null
   }
+}
+
+const normalizeGameIdInput = (value: string) => {
+  const cleaned = value.toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const left = cleaned.slice(0, 4)
+  const right = cleaned.slice(4, 8)
+  if (!right) return left
+  return `${left}-${right}`
+}
+
+const isValidGameId = (value: string) => /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(value)
+
+const createClientMoveId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID()
+  }
+  return `mv_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`
 }
 
 const promptForDebugFen = (fallbackFen: string) => {
@@ -177,6 +209,18 @@ function App() {
   const [takebacksUsed, setTakebacksUsed] = useState(0)
   const [allowEloChangeMidGame, setAllowEloChangeMidGame] = useState(false)
   const [configReady, setConfigReady] = useState(false)
+  const [onlineConnection, setOnlineConnection] = useState<WsStatus>('idle')
+  const [onlineGameId, setOnlineGameId] = useState<string | null>(null)
+  const [onlineRole, setOnlineRole] = useState<OnlineRole | null>(null)
+  const [onlinePlayerToken, setOnlinePlayerToken] = useState<string | null>(null)
+  const [onlineJoinCode, setOnlineJoinCode] = useState('')
+  const [onlineError, setOnlineError] = useState<string | null>(null)
+  const [onlineOpponentPresent, setOnlineOpponentPresent] = useState(false)
+  const [onlineOpponentEverJoined, setOnlineOpponentEverJoined] = useState(false)
+  const [onlineLastSyncFen, setOnlineLastSyncFen] = useState<string | null>(null)
+  const [onlineAwaitingSync, setOnlineAwaitingSync] = useState(false)
+  const [onlineDesync, setOnlineDesync] = useState(false)
+  const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL)
 
   // Click-to-move helper state
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
@@ -195,6 +239,9 @@ function App() {
   const botRequestIdRef = useRef(0)
   const analysisRequestIdRef = useRef(0)
   const debugInitializedRef = useRef(false)
+  const wsClientRef = useRef<WsClient | null>(null)
+  const onlineAwaitingSyncRef = useRef(false)
+  const onlineDesyncRef = useRef(false)
 
   const logEngine = useCallback((...args: unknown[]) => {
     if (import.meta.env.DEV) {
@@ -217,6 +264,7 @@ function App() {
         if (config.allowEloChangeMidGame !== undefined) {
           setAllowEloChangeMidGame(config.allowEloChangeMidGame)
         }
+        if (config.wsUrl) setWsUrl(config.wsUrl)
       } finally {
         if (!cancelled) setConfigReady(true)
       }
@@ -237,9 +285,18 @@ function App() {
       boardTheme: boardThemeKey,
       takebackLimit,
       allowEloChangeMidGame,
+      wsUrl,
     }
     void savePlayerConfig(payload)
-  }, [allowEloChangeMidGame, boardThemeKey, colorChoice, configReady, elo, gameMode, takebackLimit])
+  }, [allowEloChangeMidGame, boardThemeKey, colorChoice, configReady, elo, gameMode, takebackLimit, wsUrl])
+
+  useEffect(() => {
+    onlineAwaitingSyncRef.current = onlineAwaitingSync
+  }, [onlineAwaitingSync])
+
+  useEffect(() => {
+    onlineDesyncRef.current = onlineDesync
+  }, [onlineDesync])
 
   const sendEngine = useCallback((cmd: string) => {
     const worker = analysisWorkerRef.current
@@ -572,6 +629,124 @@ function App() {
     setTakebacksUsed(0)
   }, [sendEngine])
 
+  const loadOnlineFen = useCallback((fen: string) => {
+    try {
+      const game = new Chess()
+      game.load(fen)
+
+      if (analysisBusyRef.current) {
+        sendEngine('stop')
+      }
+      botRequestIdRef.current++
+      maiaEngineRef.current?.stop()
+      analysisRequestIdRef.current++
+
+      gameRef.current = game
+      setBoardFen(game.fen())
+      setHistory([])
+      setHistoryVerbose([])
+      setGameOver(null)
+      setAnalysisMode(false)
+      setSelectedSquare(null)
+      setPendingPromotion(null)
+      setEngineThinking(false)
+      setGameStarted(true)
+      setTakebacksUsed(0)
+      setAnalysisEntries([])
+      setAnalysisIndex(0)
+      setAnalysisBoardFen(null)
+      setAnalysisSuggestions([])
+      setAnalysisLoading(false)
+      setAnalysisError(null)
+      analysisGameRef.current = null
+      analysisCacheRef.current.clear()
+      return true
+    } catch {
+      return false
+    }
+  }, [sendEngine])
+
+  const startOnlineGame = useCallback(() => {
+    const game = new Chess()
+    if (analysisBusyRef.current) {
+      sendEngine('stop')
+    }
+    botRequestIdRef.current++
+    maiaEngineRef.current?.stop()
+    analysisRequestIdRef.current++
+
+    gameRef.current = game
+    setBoardFen(game.fen())
+    setHistory([])
+    setHistoryVerbose([])
+    setGameOver(null)
+    setAnalysisMode(false)
+    setSelectedSquare(null)
+    setPendingPromotion(null)
+    setEngineThinking(false)
+    setGameStarted(true)
+    setTakebacksUsed(0)
+    setAnalysisEntries([])
+    setAnalysisIndex(0)
+    setAnalysisBoardFen(null)
+    setAnalysisSuggestions([])
+    setAnalysisLoading(false)
+    setAnalysisError(null)
+    analysisGameRef.current = null
+    analysisCacheRef.current.clear()
+  }, [sendEngine])
+
+  const applyMove = useCallback((from: Square, to: Square, promotion?: PieceSymbol) => {
+    const move = gameRef.current.move({ from, to, promotion })
+    if (!move) return false
+    setBoardFen(gameRef.current.fen())
+    setHistory(gameRef.current.history())
+    setHistoryVerbose(gameRef.current.history({ verbose: true }) as Move[])
+    setSelectedSquare(null)
+
+    const over = buildGameOverText(gameRef.current)
+    if (over) setGameOver(over)
+    return true
+  }, [])
+
+  const sendOnlineMove = useCallback((from: Square, to: Square, promotion?: PieceSymbol) => {
+    if (!onlineGameId || !onlinePlayerToken) {
+      setOnlineError('Connexion manquante')
+      return false
+    }
+    if (onlineConnection !== 'connected') {
+      setOnlineError('Connexion interrompue')
+      return false
+    }
+    const clientMoveId = createClientMoveId()
+    wsClientRef.current?.send('move', {
+      gameId: onlineGameId,
+      playerToken: onlinePlayerToken,
+      from,
+      to,
+      promotion,
+      clientMoveId,
+    })
+    wsClientRef.current?.send('state_sync', {
+      gameId: onlineGameId,
+      playerToken: onlinePlayerToken,
+      fen: gameRef.current.fen(),
+    })
+    return true
+  }, [onlineConnection, onlineGameId, onlinePlayerToken])
+
+  const applyLocalMove = useCallback((from: Square, to: Square, promotion?: PieceSymbol) => {
+    const applied = applyMove(from, to, promotion)
+    if (!applied) {
+      return false
+    }
+    if (gameMode === 'online') {
+      sendOnlineMove(from, to, promotion)
+      setOnlineError(null)
+    }
+    return true
+  }, [applyMove, gameMode, sendOnlineMove])
+
   const startNewGame = useCallback((color: PlayerColor = 'white') => {
     // Stop any running analysis
     if (analysisBusyRef.current) {
@@ -625,22 +800,217 @@ function App() {
     analysisCacheRef.current.clear()
   }, [sendEngine])
 
+  useEffect(() => {
+    const client = new WsClient()
+    wsClientRef.current = client
+
+    const session = client.getSession()
+    if (session) {
+      setOnlineGameId(session.gameId)
+      setOnlineRole(session.role)
+      setOnlinePlayerToken(session.playerToken)
+    }
+
+    const offStatus = client.onStatus((status) => {
+      setOnlineConnection(status)
+      if (status === 'connected') {
+        setOnlineError(null)
+      }
+    })
+
+    const offGameCreated = client.on('game_created', (payload) => {
+      startOnlineGame()
+      setOnlineGameId(payload.gameId)
+      setOnlineRole(payload.role)
+      setOnlinePlayerToken(payload.playerToken)
+      setOnlineOpponentPresent(false)
+      setOnlineOpponentEverJoined(false)
+      onlineAwaitingSyncRef.current = false
+      setOnlineAwaitingSync(false)
+      setOnlineDesync(false)
+      setOnlineLastSyncFen(null)
+      setOnlineError(null)
+    })
+
+    const offGameJoined = client.on('game_joined', (payload) => {
+      startOnlineGame()
+      setOnlineGameId(payload.gameId)
+      setOnlineRole(payload.role)
+      setOnlinePlayerToken(payload.playerToken)
+      setOnlineOpponentPresent(true)
+      setOnlineOpponentEverJoined(true)
+      onlineAwaitingSyncRef.current = true
+      setOnlineAwaitingSync(true)
+      setOnlineDesync(false)
+      setOnlineLastSyncFen(null)
+      setOnlineError(null)
+    })
+
+    const offReconnected = client.on('reconnected', (payload) => {
+      const stored = client.getSession()
+      startOnlineGame()
+      setOnlineGameId(payload.gameId)
+      setOnlineRole(payload.role)
+      setOnlinePlayerToken(stored?.playerToken ?? null)
+      setOnlineOpponentPresent(false)
+      setOnlineOpponentEverJoined(false)
+      onlineAwaitingSyncRef.current = true
+      setOnlineAwaitingSync(true)
+      setOnlineDesync(false)
+      setOnlineLastSyncFen(null)
+      setOnlineError(null)
+    })
+
+    const offOpponentJoined = client.on('opponent_joined', () => {
+      setOnlineOpponentPresent(true)
+      setOnlineOpponentEverJoined(true)
+    })
+
+    const offOpponentLeft = client.on('opponent_left', () => {
+      setOnlineOpponentPresent(false)
+    })
+
+    const offStateSync = client.on('state_sync', (payload) => {
+      setOnlineLastSyncFen(payload.fen)
+      if (onlineAwaitingSyncRef.current) {
+        const applied = loadOnlineFen(payload.fen)
+        if (applied) {
+          onlineAwaitingSyncRef.current = false
+          onlineDesyncRef.current = false
+          setOnlineAwaitingSync(false)
+          setOnlineDesync(false)
+        }
+      }
+    })
+
+    const offOpponentMove = client.on('opponent_move', (payload) => {
+      if (onlineDesyncRef.current) return
+      const promotion = payload.promotion ? (payload.promotion as PieceSymbol) : undefined
+      const applied = applyMove(payload.from as Square, payload.to as Square, promotion)
+      if (!applied) {
+        setOnlineDesync(true)
+        setOnlineError('Désynchronisation détectée')
+        return
+      }
+      setOnlineError(null)
+    })
+
+    const offError = client.on('error', (payload) => {
+      setOnlineError(payload.message)
+    })
+
+    return () => {
+      offStatus()
+      offGameCreated()
+      offGameJoined()
+      offReconnected()
+      offOpponentJoined()
+      offOpponentLeft()
+      offStateSync()
+      offOpponentMove()
+      offError()
+      client.disconnect()
+      wsClientRef.current = null
+    }
+  }, [applyMove, loadOnlineFen, startOnlineGame])
+
+  useEffect(() => {
+    if (gameMode === 'online') {
+      wsClientRef.current?.connect(wsUrl)
+      const session = wsClientRef.current?.getSession()
+      if (session) {
+        setOnlineGameId(session.gameId)
+        setOnlineRole(session.role)
+        setOnlinePlayerToken(session.playerToken)
+        onlineAwaitingSyncRef.current = true
+        setOnlineAwaitingSync(true)
+      }
+      return
+    }
+
+    wsClientRef.current?.disconnect()
+    setOnlineConnection('idle')
+    setOnlineOpponentPresent(false)
+    setOnlineOpponentEverJoined(false)
+    setOnlineAwaitingSync(false)
+    setOnlineDesync(false)
+    setOnlineError(null)
+  }, [gameMode])
+
+  const clearOnlineSession = useCallback(() => {
+    wsClientRef.current?.clearSession()
+    setOnlineGameId(null)
+    setOnlineRole(null)
+    setOnlinePlayerToken(null)
+    setOnlineOpponentPresent(false)
+    setOnlineOpponentEverJoined(false)
+    setOnlineAwaitingSync(false)
+    setOnlineDesync(false)
+    setOnlineLastSyncFen(null)
+    setGameStarted(false)
+    setGameOver(null)
+  }, [])
+
+  const leaveOnlineGame = useCallback(() => {
+    clearOnlineSession()
+    wsClientRef.current?.disconnect()
+  }, [clearOnlineSession])
+
+  const createOnlineGame = useCallback(() => {
+    clearOnlineSession()
+    setOnlineError(null)
+    wsClientRef.current?.connect(wsUrl)
+    wsClientRef.current?.send('create_game', {})
+  }, [clearOnlineSession, wsUrl])
+
+  const joinOnlineGame = useCallback(() => {
+    const normalized = normalizeGameIdInput(onlineJoinCode)
+    if (!isValidGameId(normalized)) {
+      setOnlineError('Code de partie invalide')
+      return
+    }
+    clearOnlineSession()
+    setOnlineError(null)
+    wsClientRef.current?.connect(wsUrl)
+    wsClientRef.current?.send('join_game', { gameId: normalized })
+  }, [clearOnlineSession, onlineJoinCode, wsUrl])
+
+  const handleCopyGameId = useCallback(() => {
+    if (!onlineGameId) return
+    if (!navigator?.clipboard?.writeText) {
+      setOnlineError('Clipboard indisponible')
+      return
+    }
+    navigator.clipboard
+      .writeText(onlineGameId)
+      .catch(() => setOnlineError('Impossible de copier le code'))
+  }, [onlineGameId])
+
+  const handleResync = useCallback(() => {
+    if (!onlineLastSyncFen) {
+      setOnlineError('Aucun état synchronisé disponible')
+      return
+    }
+    const applied = loadOnlineFen(onlineLastSyncFen)
+    if (!applied) {
+      setOnlineError('Resync impossible')
+      return
+    }
+    onlineAwaitingSyncRef.current = false
+    onlineDesyncRef.current = false
+    setOnlineAwaitingSync(false)
+    setOnlineDesync(false)
+    setOnlineError(null)
+  }, [loadOnlineFen, onlineLastSyncFen])
+
+  const handleJoinCodeChange = useCallback((value: string) => {
+    setOnlineJoinCode(normalizeGameIdInput(value))
+    setOnlineError(null)
+  }, [])
+
   const getPromotionMove = (game: Chess, from: Square, to: Square) => {
     const legalMoves = game.moves({ verbose: true }) as Move[]
     return legalMoves.find((mv) => mv.from === from && mv.to === to) ?? null
-  }
-
-  const applyMove = (from: Square, to: Square, promotion?: PieceSymbol) => {
-    const move = gameRef.current.move({ from, to, promotion })
-    if (!move) return false
-    setBoardFen(gameRef.current.fen())
-    setHistory(gameRef.current.history())
-    setHistoryVerbose(gameRef.current.history({ verbose: true }) as Move[])
-    setSelectedSquare(null)
-
-    const over = buildGameOverText(gameRef.current)
-    if (over) setGameOver(over)
-    return true
   }
 
   const onDrop = (sourceSquare: Square, targetSquare: Square) => {
@@ -648,12 +1018,42 @@ function App() {
       return makeAnalysisMove(sourceSquare, targetSquare)
     }
     if (!gameStarted || gameOver || engineThinking || pendingPromotion) return false
-    // In 1v1 mode, both colors can move; in vs-maia mode, only playerColor can move
-    if (gameMode !== '1v1' && gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return false
+    if (gameMode === 'online') {
+      if (onlineDesync) {
+        setOnlineError('Désynchronisation détectée')
+        return false
+      }
+      if (onlineConnection !== 'connected') {
+        setOnlineError('Connexion interrompue')
+        return false
+      }
+      if (onlineAwaitingSync) {
+        setOnlineError('Synchronisation en cours')
+        return false
+      }
+      if (!onlineRole) {
+        setOnlineError('Rôle en attente')
+        return false
+      }
+      if (!onlineOpponentPresent) {
+        setOnlineError('En attente de l\'adversaire')
+        return false
+      }
+      const expectedTurn = onlineRole === 'white' ? 'w' : 'b'
+      if (gameRef.current.turn() !== expectedTurn) {
+        setOnlineError('Ce n\'est pas votre tour')
+        return false
+      }
+    } else if (gameMode !== '1v1') {
+      // In 1v1 mode, both colors can move; in vs-maia mode, only playerColor can move
+      if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return false
+    }
 
     try {
       const legalMove = getPromotionMove(gameRef.current, sourceSquare, targetSquare)
-      if (!legalMove) return false
+      if (!legalMove) {
+        return false
+      }
 
       if (legalMove.promotion) {
         setPendingPromotion({
@@ -664,7 +1064,7 @@ function App() {
         return false
       }
 
-      return applyMove(sourceSquare, targetSquare)
+      return applyLocalMove(sourceSquare, targetSquare)
     } catch {
       return false
     }
@@ -688,8 +1088,30 @@ function App() {
     }
 
     if (!gameStarted || gameOver || engineThinking) return
-    // In 1v1 mode, both colors can move; in vs-maia mode, only playerColor can move
-    if (gameMode !== '1v1' && gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return
+    if (gameMode === 'online') {
+      if (onlineDesync) {
+        setOnlineError('Désynchronisation détectée')
+        return
+      }
+      if (onlineConnection !== 'connected') {
+        setOnlineError('Connexion interrompue')
+        return
+      }
+      if (onlineAwaitingSync) {
+        setOnlineError('Synchronisation en cours')
+        return
+      }
+      if (!onlineRole) return
+      if (!onlineOpponentPresent) return
+      const expectedTurn = onlineRole === 'white' ? 'w' : 'b'
+      if (gameRef.current.turn() !== expectedTurn) {
+        setOnlineError('Ce n\'est pas votre tour')
+        return
+      }
+    } else if (gameMode === 'vs-maia') {
+      // In vs-maia mode, only playerColor can move
+      if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) return
+    }
 
     if (selectedSquare) {
       const move = onDrop(selectedSquare, squareTyped)
@@ -701,7 +1123,9 @@ function App() {
     const currentTurn = gameRef.current.turn()
     const canSelectPiece = gameMode === '1v1'
       ? currentPiece && currentPiece.color === currentTurn
-      : currentPiece && currentPiece.color === (playerColor === 'white' ? 'w' : 'b')
+      : gameMode === 'online'
+        ? currentPiece && onlineRole && currentPiece.color === (onlineRole === 'white' ? 'w' : 'b')
+        : currentPiece && currentPiece.color === (playerColor === 'white' ? 'w' : 'b')
     
     if (canSelectPiece) {
       setSelectedSquare(squareTyped)
@@ -730,6 +1154,17 @@ function App() {
       return null
     }
   }, [fenToShow])
+
+  const onlineCanMove = useMemo(() => {
+    if (gameMode !== 'online') return false
+    if (!gameStarted) return false
+    if (onlineConnection !== 'connected') return false
+    if (onlineAwaitingSync) return false
+    if (onlineDesync) return false
+    if (!onlineRole) return false
+    if (!onlineOpponentPresent) return false
+    return gameRef.current.turn() === (onlineRole === 'white' ? 'w' : 'b')
+  }, [boardFen, gameMode, gameStarted, onlineAwaitingSync, onlineConnection, onlineDesync, onlineOpponentPresent, onlineRole])
 
   const boardAreaRef = useRef<HTMLElement>(null)
 
@@ -929,8 +1364,8 @@ function App() {
   }, [gameOver])
 
   useEffect(() => {
-    // In 1v1 mode, Maia doesn't play
-    if (gameMode === '1v1') return
+    // Maia only plays in vs-maia mode
+    if (gameMode !== 'vs-maia') return
     if (!gameStarted || gameOver || !botEngineReady || analysisMode || engineThinking) return
     if (gameRef.current.turn() === (playerColor === 'white' ? 'b' : 'w')) {
       if (!maiaEngineRef.current) return
@@ -997,7 +1432,24 @@ function App() {
     }
 
     if (!gameStarted) {
+      if (gameMode === 'online') return 'Create or join an online game'
       return gameMode === '1v1' ? 'Select 1v1 mode, then start the game' : 'Choose your color, then start the game'
+    }
+    if (gameMode === 'online') {
+      if (onlineConnection === 'connecting' || onlineConnection === 'reconnecting') {
+        return 'Connecting...'
+      }
+      if (onlineConnection !== 'connected') return 'Disconnected'
+      if (onlineDesync) return 'Desync detected'
+      if (onlineAwaitingSync) return 'Syncing...'
+      if (!onlineOpponentPresent) {
+        return onlineOpponentEverJoined ? 'Opponent left' : 'Waiting opponent'
+      }
+      if (gameOver) return gameOver
+      const checkText = isInCheck ? ' (Check!)' : ''
+      const isYourTurn =
+        onlineRole && gameRef.current.turn() === (onlineRole === 'white' ? 'w' : 'b')
+      return isYourTurn ? `Your turn${checkText}` : `Opponent turn${checkText}`
     }
     if (gameOver) return gameOver
     if (gameMode === '1v1') {
@@ -1010,19 +1462,82 @@ function App() {
     const turn = gameRef.current.turn() === 'w' ? 'White' : 'Black'
     const checkText = isInCheck ? ' (Check!)' : ''
     return `${turn} to move${checkText}`
-  }, [analysisMode, fenToShow, analysisEntries, analysisIndex, botEngineReady, engineThinking, gameStarted, gameOver, isInCheck, gameMode])
+  }, [analysisMode, fenToShow, analysisEntries, analysisIndex, botEngineReady, engineThinking, gameStarted, gameOver, isInCheck, gameMode, onlineAwaitingSync, onlineConnection, onlineDesync, onlineOpponentEverJoined, onlineOpponentPresent, onlineRole])
+
+  const onlineStatusText = useMemo(() => {
+    if (onlineConnection === 'connecting' || onlineConnection === 'reconnecting') return 'Connecting...'
+    if (onlineConnection === 'disconnected') return 'Disconnected'
+    if (onlineConnection === 'idle') return 'Idle'
+    if (onlineDesync) return 'Desync detected'
+    if (onlineAwaitingSync) return 'Syncing...'
+    if (!onlineGameId) return 'Connected'
+    if (!onlineOpponentPresent) {
+      return onlineOpponentEverJoined ? 'Opponent left' : 'Waiting opponent'
+    }
+    if (!onlineRole) return 'Syncing...'
+    const isYourTurn =
+      gameRef.current.turn() === (onlineRole === 'white' ? 'w' : 'b')
+    return isYourTurn ? 'Your turn' : 'Opponent turn'
+  }, [boardFen, onlineAwaitingSync, onlineConnection, onlineDesync, onlineGameId, onlineOpponentEverJoined, onlineOpponentPresent, onlineRole])
+
+  const onlineConnectionText = useMemo(() => {
+    if (onlineConnection === 'connecting' || onlineConnection === 'reconnecting') return 'Connecting...'
+    if (onlineConnection === 'disconnected') return 'Disconnected'
+    if (onlineConnection === 'idle') return ''
+    if (onlineDesync) return 'Desync detected'
+    if (onlineAwaitingSync) return 'Syncing...'
+    return ''
+  }, [onlineAwaitingSync, onlineConnection, onlineDesync])
+
+  const onlineStatusDotTone = useMemo(() => {
+    if (onlineConnection === 'disconnected') return 'error'
+    if (onlineConnection === 'connected') return 'ok'
+    return 'warn'
+  }, [onlineConnection])
+
+  const onlinePresenceText = useMemo(() => {
+    if (!onlineGameId) return 'Idle'
+    if (onlineOpponentPresent) return 'Opponent connected'
+    if (onlineOpponentEverJoined) return 'Opponent left'
+    return 'Waiting for opponent'
+  }, [onlineGameId, onlineOpponentEverJoined, onlineOpponentPresent])
+
+  const onlineTurnText = useMemo(() => {
+    if (onlineConnection !== 'connected') return ''
+    if (onlineDesync || onlineAwaitingSync) return ''
+    if (!onlineGameId || !onlineOpponentPresent || !onlineRole) return ''
+    const isYourTurn = gameRef.current.turn() === (onlineRole === 'white' ? 'w' : 'b')
+    return isYourTurn ? 'Your turn' : 'Opponent turn'
+  }, [boardFen, onlineAwaitingSync, onlineConnection, onlineDesync, onlineGameId, onlineOpponentPresent, onlineRole])
+
+  const onlineTurnTone = onlineTurnText
+    ? (onlineTurnText === 'Your turn' ? 'accent' : 'neutral')
+    : undefined
+
+  const onlineStatusDetail = useMemo(() => {
+    if (onlineConnectionText) return onlineConnectionText
+    return onlinePresenceText
+  }, [onlineConnectionText, onlinePresenceText])
 
   const statusText = useMemo(() => {
+    if (gameMode === 'online') return onlineStatusText
     if (!botEngineReady) return botEngineStatus
     if (!analysisEngineReady) return `Maia ready - ${analysisEngineStatus}`
     return 'Engines ready'
-  }, [analysisEngineReady, analysisEngineStatus, botEngineReady, botEngineStatus])
+  }, [analysisEngineReady, analysisEngineStatus, botEngineReady, botEngineStatus, gameMode, onlineStatusText])
+
+  const sidebarStatusOk = useMemo(() => {
+    if (gameMode === 'online') return onlineConnection === 'connected'
+    if (gameMode === '1v1') return true
+    return botEngineReady
+  }, [botEngineReady, gameMode, onlineConnection])
 
   const startGameFromSelection = useCallback(() => {
+    if (gameMode === 'online') return
     const resolvedColor =
       colorChoice === 'random' ? (Math.random() < 0.5 ? 'white' : 'black') : colorChoice
     startNewGame(resolvedColor)
-  }, [colorChoice, startNewGame])
+  }, [colorChoice, gameMode, startNewGame])
 
   const handleColorChange = (color: ColorChoice) => {
     if (DEBUG_MODE) return
@@ -1034,6 +1549,7 @@ function App() {
     if (DEBUG_MODE) return
     if (gameStarted) return
     setGameMode(mode)
+    setOnlineError(null)
   }
 
   const handleEloChange = (value: number) => {
@@ -1112,7 +1628,7 @@ function App() {
   }, [analysisBoardFen, analysisEntries, analysisIndex, analysisMode, analysisSuggestions])
 
   const engineAssetsReady = Boolean(engineAssets)
-  const analysisAvailable = history.length > 0 && engineAssetsReady
+  const analysisAvailable = gameMode !== 'online' && history.length > 0 && engineAssetsReady
   const currentAnalysisEntry = analysisEntries[analysisIndex]
   const isExploringVariant =
     analysisMode && currentAnalysisEntry && analysisBoardFen !== currentAnalysisEntry.fen
@@ -1139,24 +1655,29 @@ function App() {
     takebackLimit === Infinity ? Infinity : Math.max(0, takebackLimit - takebacksUsed)
   const canTakeback =
     gameStarted &&
+    gameMode !== 'online' &&
     !analysisMode &&
     !engineThinking &&
     history.length > 0 &&
     (takebackLimit === Infinity || takebacksUsed < takebackLimit)
   const promotionPieceTypes = useMemo(() => {
-    // In 1v1 mode, use the current turn's color; otherwise use playerColor
-    const currentColor = gameMode === '1v1' ? gameRef.current.turn() : (playerColor === 'white' ? 'w' : 'b')
+    // In 1v1 mode, use the current turn's color; otherwise use the active player color.
+    const currentColor = gameMode === '1v1'
+      ? gameRef.current.turn()
+      : gameMode === 'online' && onlineRole
+        ? (onlineRole === 'white' ? 'w' : 'b')
+        : (playerColor === 'white' ? 'w' : 'b')
     const colorPrefix = currentColor === 'w' ? 'w' : 'b'
     return (['q', 'r', 'b', 'n'] as PieceSymbol[]).map((piece) => ({
       piece,
       key: `${colorPrefix}${piece.toUpperCase()}`,
     }))
-  }, [playerColor, gameMode, boardFen])
+  }, [playerColor, gameMode, boardFen, onlineRole])
 
   const handleTakeback = () => {
     if (!canTakeback) return
-    // In 1v1 mode, undo only 1 move; in vs-maia mode, undo 2 moves (player + bot)
-    const movesToUndo = gameMode === '1v1' ? 1 : 2
+    // In vs-maia mode, undo 2 moves (player + bot); otherwise undo 1.
+    const movesToUndo = gameMode === 'vs-maia' ? 2 : 1
     let undone = 0
     while (undone < movesToUndo && gameRef.current.history().length > 0) {
       const move = gameRef.current.undo()
@@ -1175,6 +1696,29 @@ function App() {
     setTakebacksUsed((prev) => prev + 1)
   }
 
+  const onlinePanel = gameMode === 'online' ? (
+    <OnlinePanel
+      connectionText={onlineConnectionText}
+      error={onlineError}
+      gameId={onlineGameId}
+      joinCode={onlineJoinCode}
+      canCreate={onlineConnection !== 'connecting' && onlineConnection !== 'reconnecting'}
+      canJoin={
+        onlineConnection !== 'connecting' &&
+        onlineConnection !== 'reconnecting' &&
+        isValidGameId(onlineJoinCode)
+      }
+      canResync={onlineDesync && Boolean(onlineLastSyncFen)}
+      canLeave={Boolean(onlineGameId)}
+      onJoinCodeChange={handleJoinCodeChange}
+      onCreateGame={createOnlineGame}
+      onJoinGame={joinOnlineGame}
+      onCopyGameId={handleCopyGameId}
+      onResync={handleResync}
+      onLeave={leaveOnlineGame}
+    />
+  ) : null
+
   return (
     <div className="app-container" style={appThemeStyle}>
       <Sidebar
@@ -1189,6 +1733,11 @@ function App() {
         colorChoice={colorChoice}
         gameMode={gameMode}
         statusText={statusText}
+        statusOk={sidebarStatusOk}
+        statusHeadline={gameMode === 'online' ? onlineTurnText : undefined}
+        statusHeadlineTone={gameMode === 'online' ? onlineTurnTone : undefined}
+        statusDetail={gameMode === 'online' ? onlineStatusDetail : undefined}
+        statusDotTone={gameMode === 'online' ? onlineStatusDotTone : undefined}
         isDebugMode={DEBUG_MODE}
         allowEloChangeMidGame={allowEloChangeMidGame}
         onStartGame={startGameFromSelection}
@@ -1200,6 +1749,7 @@ function App() {
         onColorChange={handleColorChange}
         onGameModeChange={handleGameModeChange}
         onOpenSettings={() => setSettingsOpen(true)}
+        onlinePanel={onlinePanel}
       />
 
       <main className="board-area" ref={boardAreaRef}>
@@ -1209,8 +1759,15 @@ function App() {
               options={{
                 id: 'vs-maia',
                 position: fenToShow,
-                boardOrientation: gameMode === '1v1' ? 'white' : playerColor,
-                allowDragging: analysisMode || (gameStarted && !engineThinking && !gameOver),
+                boardOrientation:
+                  gameMode === '1v1'
+                    ? 'white'
+                    : gameMode === 'online'
+                      ? (onlineRole ?? 'white')
+                      : playerColor,
+                allowDragging:
+                  analysisMode ||
+                  (gameStarted && !engineThinking && !gameOver && (gameMode !== 'online' || onlineCanMove)),
                 boardStyle: {
                   width: '100%',
                   height: '100%',
@@ -1260,15 +1817,27 @@ function App() {
       {showGameOverDialog && gameOver && (
         <div className="modal-overlay">
           <div className="modal-content">
-            <h2>{isPlayerVictory(gameRef.current, playerColor) ? 'Win' : 'Game Over'}</h2>
+            <h2>
+              {gameMode === 'online'
+                ? (onlineRole && isPlayerVictory(gameRef.current, onlineRole) ? 'Win' : 'Game Over')
+                : (isPlayerVictory(gameRef.current, playerColor) ? 'Win' : 'Game Over')}
+            </h2>
             <p>{gameOver}</p>
             <div className="modal-actions">
-              <button className="primary" onClick={startGameFromSelection}>
-                Start Game
-              </button>
-              <button className="ghost" onClick={() => setShowGameOverDialog(false)}>
-                View Board
-              </button>
+              {gameMode === 'online' ? (
+                <button className="primary" onClick={() => setShowGameOverDialog(false)}>
+                  Close
+                </button>
+              ) : (
+                <>
+                  <button className="primary" onClick={startGameFromSelection}>
+                    Start Game
+                  </button>
+                  <button className="ghost" onClick={() => setShowGameOverDialog(false)}>
+                    View Board
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -1289,7 +1858,7 @@ function App() {
                   aria-label={`Promote to ${piece.toUpperCase()}`}
                   onClick={() => {
                     const { from, to } = pendingPromotion
-                    applyMove(from, to, piece)
+                    applyLocalMove(from, to, piece)
                     setPendingPromotion(null)
                   }}
                 >

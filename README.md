@@ -21,6 +21,16 @@ npm i
 - Web dev server: `npm run dev`
 - Build a desktop app: `npm run electron:build`
 
+## Online mode (WebSocket)
+The client expects a WebSocket relay server at `VITE_WS_URL` (default: `ws://localhost:8080/ws`).
+
+Example:
+```bash
+VITE_WS_URL=ws://localhost:8080/ws npm run dev
+```
+
+For the server, see `server/readme.md`.
+
 ## Engine downloads (packaged app)
 - On first launch the app downloads Stockfish, Zerofish, and Maia weights into `~/.vibeChess`.
 - Defaults:

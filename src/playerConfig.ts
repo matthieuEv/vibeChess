@@ -9,6 +9,7 @@ export type PlayerConfig = {
   boardTheme: BoardThemeKey
   takebackLimit: number
   allowEloChangeMidGame: boolean
+  wsUrl: string
 }
 
 type StoredPlayerConfig = Omit<PlayerConfig, 'takebackLimit'> & {
@@ -31,7 +32,7 @@ const getIpcRenderer = () => {
 }
 
 const isGameMode = (value: unknown): value is GameMode =>
-  value === 'vs-maia' || value === '1v1'
+  value === 'vs-maia' || value === '1v1' || value === 'online'
 
 const isColorChoice = (value: unknown): value is ColorChoice =>
   value === 'white' || value === 'black' || value === 'random'
@@ -59,6 +60,10 @@ const normalizeConfig = (value: unknown): Partial<PlayerConfig> | null => {
 
   if (typeof data.allowEloChangeMidGame === 'boolean') {
     result.allowEloChangeMidGame = data.allowEloChangeMidGame
+  }
+
+  if (typeof data.wsUrl === 'string' && data.wsUrl.trim().length > 0) {
+    result.wsUrl = data.wsUrl.trim()
   }
 
   return result

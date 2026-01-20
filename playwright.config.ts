@@ -11,12 +11,19 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  webServer: {
-    command:
-      'npx vite build --mode e2e && npx vite preview --host 127.0.0.1 --port 4173 --strictPort',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
-  },
+  webServer: [
+    {
+      command: 'cd server && go run .',
+      url: 'http://127.0.0.1:8080/health',
+      reuseExistingServer: !process.env.CI,
+    },
+    {
+      command:
+        'npx vite build --mode e2e && npx vite preview --host 127.0.0.1 --port 4173 --strictPort',
+      url: 'http://127.0.0.1:4173',
+      reuseExistingServer: !process.env.CI,
+    },
+  ],
   projects: [
     {
       name: 'chromium',

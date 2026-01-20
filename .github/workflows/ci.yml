@@ -7,7 +7,8 @@ on:
     branches: master
 
 jobs:
-  build-and-test:
+  application:
+    name: Application
     runs-on: ubuntu-latest
 
     steps:
@@ -40,3 +41,22 @@ jobs:
 
       - name: Run e2e tests
         run: npm run test:e2e
+
+  server:
+    name: Server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+          cache-dependency-path: server/go.sum
+
+      - name: Run server tests
+        working-directory: server
+        run: go test ./...
